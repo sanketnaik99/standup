@@ -5,7 +5,18 @@ export interface Task {
   priority: TaskPriority;
   status: TaskStatus;
   createdAt: number;
+  github?: GithubMetadata;
   deadline?: number | null;
+}
+
+export interface GithubMetadata {
+  url: string;
+  number: number;
+  repo: string;
+  owner: string;
+  state: string;
+  title: string;
+  type: "issue" | "pull_request";
 }
 
 export type TaskStatus = "todo" | "in-progress" | "paused" | "done";

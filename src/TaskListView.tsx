@@ -69,6 +69,7 @@ export default function TaskListView({ date }: TaskListViewProps) {
     title: string;
     description: string;
     priority: string;
+    github?: import("./types").GithubMetadata;
     deadline?: Date | null;
   }) {
     pushToUndoStack();
@@ -81,6 +82,7 @@ export default function TaskListView({ date }: TaskListViewProps) {
           priority: values.priority as TaskPriority,
           status: "todo",
           createdAt: Date.now(),
+          github: values.github,
           deadline: values.deadline ? values.deadline.getTime() : null,
         },
         date,
@@ -282,16 +284,34 @@ function TaskItem({
           ? { source: Icon.CircleProgress50, tintColor: Color.Blue }
           : { source: Icon.Circle };
 
+  const accessories: List.Item.Accessory[] = [{ tag: { value: task.priority, color: priorityColor } }];
+
+  if (task.github) {
+    let stateColor = Color.Green;
+    if (task.github.state === "closed") stateColor = Color.Red;
+    if (task.github.state === "merged") stateColor = Color.Purple;
+
+    accessories.unshift({
+      icon: { source: "github-mark.png", tintColor: Color.PrimaryText }, // using built-in icon if available or just text
+      tag: { value: `#${task.github.number}`, color: stateColor },
+      tooltip: `GitHub ${task.github.type === "pull_request" ? "PR" : "Issue"}: ${task.github.state}`,
+    });
+  }
+
   return (
     <List.Item
       title={task.title}
       icon={icon}
-      accessories={[
-        ...(task.deadline ? [{ date: new Date(task.deadline), tooltip: "Deadline" }] : []),
-        { tag: { value: task.priority, color: priorityColor } },
-      ]}
+      accessories={[...(task.deadline ? [{ date: new Date(task.deadline), tooltip: "Deadline" }] : []), ...accessories]}
       actions={
         <ActionPanel>
+          {task.github && (
+            <Action.OpenInBrowser
+              url={task.github.url}
+              title="Open in GitHub"
+              shortcut={{ modifiers: ["opt"], key: "enter" }}
+            />
+          )}
           <Action
             title={task.status === "done" ? "Mark as Undone" : "Mark as Done"}
             icon={Icon.CheckCircle}
@@ -502,6 +522,14 @@ function TaskDetail({
             />
           </Detail.Metadata.TagList>
           <Detail.Metadata.Label title="Created" text={new Date(task.createdAt).toLocaleString()} />
+          {task.github && (
+            <>
+              <Detail.Metadata.Separator />
+              <Detail.Metadata.Label title="GitHub" text={`#${task.github.number}`} />
+              <Detail.Metadata.Label title="State" text={task.github.state} />
+              <Detail.Metadata.Link title="Link" target={task.github.url} text="Open" />
+            </>
+          )}
           {task.deadline && (
             <Detail.Metadata.Label title="Deadline" text={new Date(task.deadline).toLocaleDateString()} />
           )}
