@@ -1,6 +1,6 @@
 import { Action, ActionPanel, Form, useNavigation, showToast, Toast } from "@raycast/api";
 import { useForm, FormValidation } from "@raycast/utils";
-import { useState } from "react";
+import { useState, useRef } from "react";
 import { GithubMetadata } from "./types";
 import { fetchGithubDetails, parseGithubUrl } from "./github";
 
@@ -9,6 +9,7 @@ interface FormValues {
   description: string;
   priority: string;
   github?: GithubMetadata;
+  githubUrl?: string;
   deadline?: Date | null;
 }
 
@@ -21,13 +22,13 @@ interface TaskFormProps {
 export default function TaskForm({ initialValues, submitTitle = "Submit", onSubmit }: TaskFormProps) {
   const { pop } = useNavigation();
   const [isFetching, setIsFetching] = useState(false);
-
-  const { handleSubmit, itemProps, setValue, values } = useForm<FormValues>({
+  const [github, setGithub] = useState<GithubMetadata | undefined>(initialValues?.github);
+  const { handleSubmit, itemProps, setValue, values: formValues } = useForm<FormValues>({
     initialValues: {
       title: initialValues?.title || "",
       description: initialValues?.description || "",
       priority: initialValues?.priority || "medium",
-      github: initialValues?.github,
+      githubUrl: initialValues?.github?.url || "",
       deadline: initialValues?.deadline,
     },
     validation: {
@@ -35,28 +36,42 @@ export default function TaskForm({ initialValues, submitTitle = "Submit", onSubm
     },
     onSubmit: async (values) => {
       try {
-        await onSubmit(values);
+        await onSubmit({ ...values, github });
         pop();
       } catch (error) {
         // Error handling is expected to be done by the parent or global error handler
       }
     },
   });
+  
+  // Keep a ref to values to access the latest state in async callbacks
+  const valuesRef = useRef(formValues);
+  valuesRef.current = formValues;
 
-  const handleTitleChange = async (newValue: string) => {
-    setValue("title", newValue);
+  const handleGithubUrlChange = async (newValue: string) => {
+    setValue("githubUrl", newValue);
     
-    if (parseGithubUrl(newValue) && !values.description) {
+    if (!newValue) {
+        setGithub(undefined);
+        return;
+    }
+
+    if (parseGithubUrl(newValue)) {
         setIsFetching(true);
         const toast = await showToast({ style: Toast.Style.Animated, title: "Fetching GitHub details..." });
         
         const result = await fetchGithubDetails(newValue);
         
         if (result) {
-            setValue("title", result.metadata.title);
-            setValue("description", result.body || result.metadata.url); 
+            // Check value from ref to avoid stale closure
+            if (!valuesRef.current.title) {
+                setValue("title", result.metadata.title);
+            }
+            if (!valuesRef.current.description) {
+             setValue("description", result.body || result.metadata.url); 
+            }
             
-            setValue("github", result.metadata);
+            setGithub(result.metadata);
             toast.style = Toast.Style.Success;
             toast.title = "Fetched GitHub details";
         } else {
@@ -77,10 +92,15 @@ export default function TaskForm({ initialValues, submitTitle = "Submit", onSubm
       }
     >
       <Form.TextField
+        {...itemProps.githubUrl}
+        title="GitHub Link"
+        placeholder="Paste GitHub Issue or PR URL"
+        onChange={handleGithubUrlChange}
+      />
+      <Form.TextField
         {...itemProps.title}
         title="Title"
-        placeholder="Enter task title or GitHub Issue URL"
-        onChange={handleTitleChange}
+        placeholder="Enter task title"
       />
       <Form.TextArea
         {...itemProps.description}

@@ -25,6 +25,37 @@ export default function TaskListView({ date }: TaskListViewProps) {
     const loadedTasks = await getTasks(date);
     setTasks(loadedTasks);
     setIsLoading(false);
+
+    // Background refresh
+    refreshGithubStatuses(loadedTasks);
+  }
+
+  async function refreshGithubStatuses(currentTasks: Task[]) {
+    const tasksToRefresh = currentTasks.filter(t => t.github);
+    if (tasksToRefresh.length === 0) return;
+
+    const { fetchGithubDetails } = await import("./github");
+    
+    let hasChanges = false;
+    const updatedTasks = [...currentTasks];
+
+    await Promise.all(tasksToRefresh.map(async (task) => {
+        if (!task.github) return;
+        const freshDetails = await fetchGithubDetails(task.github.url);
+        if (freshDetails && freshDetails.metadata.state !== task.github.state) {
+            const index = updatedTasks.findIndex(t => t.id === task.id);
+            if (index !== -1) {
+                updatedTasks[index] = { ...updatedTasks[index], github: freshDetails.metadata };
+                hasChanges = true;
+                // Update individual task in storage to be safe, but we'll do a bulk save if possible or just rely on the final state update
+                await updateTask(updatedTasks[index], date); 
+            }
+        }
+    }));
+
+    if (hasChanges) {
+        setTasks(updatedTasks);
+    }
   }
 
   const priorityOrder = { high: 3, medium: 2, low: 1 };
@@ -173,11 +204,11 @@ function TaskItem({
     let stateColor = Color.Green;
     if (task.github.state === "closed") stateColor = Color.Red;
     if (task.github.state === "merged") stateColor = Color.Purple;
+    if (task.github.state === "changes_requested") stateColor = Color.Orange;
 
     accessories.unshift({
-        icon: { source: "github-mark.png", tintColor: Color.PrimaryText }, // using built-in icon if available or just text
         tag: { value: `#${task.github.number}`, color: stateColor },
-        tooltip: `GitHub ${task.github.type === 'pull_request' ? 'PR' : 'Issue'}: ${task.github.state}`
+        tooltip: `GitHub ${task.github.type === 'pull_request' ? 'PR' : 'Issue'}: ${task.github.state.replace(/_/g, " ")}`
     });
   }
 
@@ -191,18 +222,11 @@ function TaskItem({
       ]}
       actions={
         <ActionPanel>
-          {task.github && <Action.OpenInBrowser url={task.github.url} title="Open in GitHub" shortcut={{ modifiers: ["opt"], key: "enter" }} />}
           <Action title={task.status === "done" ? "Mark as Undone" : "Mark as Done"} icon={Icon.CheckCircle} onAction={handleToggleStatus} />
           <Action.Push
             title="Show Details"
             icon={Icon.Sidebar}
             shortcut={{ modifiers: ["cmd"], key: "return" }}
-            target={<TaskDetail task={task} date={date} onUpdate={onUpdate} />}
-          />
-          <Action.Push
-            title="Show Details"
-            icon={Icon.Sidebar}
-            shortcut={{ modifiers: ["cmd"], key: "arrowRight" }}
             target={<TaskDetail task={task} date={date} onUpdate={onUpdate} />}
           />
           <Action.Push
@@ -234,6 +258,7 @@ function TaskItem({
               />
             }
           />
+          {task.github && <Action.OpenInBrowser url={task.github.url} title="Open in GitHub" shortcut={{ modifiers: ["opt"], key: "enter" }} />}
           <Action
             title="Pause Task"
             icon={Icon.Pause}
@@ -325,7 +350,17 @@ function TaskDetail({ task: initialTask, date, onUpdate }: { task: Task; date: D
             <>
                 <Detail.Metadata.Separator />
                 <Detail.Metadata.Label title="GitHub" text={`#${task.github.number}`} />
-                <Detail.Metadata.Label title="State" text={task.github.state} />
+                <Detail.Metadata.TagList title="State">
+                  <Detail.Metadata.TagList.Item 
+                    text={task.github.state.replace(/_/g, " ")} 
+                    color={
+                        task.github.state === "merged" ? Color.Purple :
+                        task.github.state === "changes_requested" ? Color.Orange :
+                        task.github.state === "closed" ? Color.Red :
+                        Color.Green
+                    }
+                  />
+                </Detail.Metadata.TagList>
                 <Detail.Metadata.Link title="Link" target={task.github.url} text="Open" />
             </>
           )}
@@ -353,6 +388,7 @@ function TaskDetail({ task: initialTask, date, onUpdate }: { task: Task; date: D
                   description: task.description,
                   priority: task.priority,
                   deadline: task.deadline ? new Date(task.deadline) : null,
+                  github: task.github,
                 }}
                 submitTitle="Update Task"
                 onSubmit={async (values) => {
