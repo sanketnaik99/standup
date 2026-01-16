@@ -1,7 +1,7 @@
-import { Action, ActionPanel, Color, Detail, Icon, List, showToast, Toast } from "@raycast/api";
-import { useEffect, useState } from "react";
+import { Action, ActionPanel, Color, Detail, Icon, List, showToast, Toast, useNavigation } from "@raycast/api";
+import { useEffect, useState, useCallback, useRef } from "react";
 import { Task, TaskPriority, TaskStatus } from "./types";
-import { deleteTask, getDateString, getTasks, updateTask, createTask, migrateTasksToToday } from "./utils";
+import { deleteTask, getDateString, getTasks, updateTask, createTask, migrateTasksToToday, saveTasks } from "./utils";
 import TaskForm from "./TaskForm";
 import { v4 as uuidv4 } from "uuid";
 
@@ -12,10 +12,17 @@ interface TaskListViewProps {
 export default function TaskListView({ date }: TaskListViewProps) {
   const [tasks, setTasks] = useState<Task[]>([]);
   const [isLoading, setIsLoading] = useState(true);
+  const [undoStack, setUndoStack] = useState<Task[][]>([]);
+  const [redoStack, setRedoStack] = useState<Task[][]>([]);
+  const tasksRef = useRef<Task[]>([]);
 
   useEffect(() => {
     loadTasks();
   }, [date]);
+
+  useEffect(() => {
+    tasksRef.current = tasks;
+  }, [tasks]);
 
   async function loadTasks() {
     setIsLoading(true);
@@ -25,6 +32,78 @@ export default function TaskListView({ date }: TaskListViewProps) {
     const loadedTasks = await getTasks(date);
     setTasks(loadedTasks);
     setIsLoading(false);
+  }
+
+  const pushToUndoStack = useCallback(() => {
+    setUndoStack((prev) => [...prev, tasksRef.current]);
+    setRedoStack([]); // Clear redo stack on new action
+  }, []);
+
+  async function handleUndo() {
+    if (undoStack.length === 0) return;
+
+    const previousTasks = undoStack[undoStack.length - 1];
+    const newUndoStack = undoStack.slice(0, -1);
+
+    setRedoStack((prev) => [...prev, tasksRef.current]);
+    setUndoStack(newUndoStack);
+    setTasks(previousTasks);
+    await saveTasks(date, previousTasks);
+    await showToast({ style: Toast.Style.Success, title: "Undone" });
+  }
+
+  async function handleRedo() {
+    if (redoStack.length === 0) return;
+
+    const nextTasks = redoStack[redoStack.length - 1];
+    const newRedoStack = redoStack.slice(0, -1);
+
+    setUndoStack((prev) => [...prev, tasksRef.current]);
+    setRedoStack(newRedoStack);
+    setTasks(nextTasks);
+    await saveTasks(date, nextTasks);
+    await showToast({ style: Toast.Style.Success, title: "Redone" });
+  }
+
+  async function handleCreateTaskWrapped(values: {
+    title: string;
+    description: string;
+    priority: string;
+    github?: import("./types").GithubMetadata;
+    deadline?: Date | null;
+  }) {
+    pushToUndoStack();
+    try {
+      await createTask(
+        {
+          id: uuidv4(),
+          title: values.title,
+          description: values.description,
+          priority: values.priority as TaskPriority,
+          status: "todo",
+          createdAt: Date.now(),
+          github: values.github,
+          deadline: values.deadline ? values.deadline.getTime() : null,
+        },
+        date,
+      );
+      await showToast({ style: Toast.Style.Success, title: "Task added" });
+      loadTasks();
+    } catch (error) {
+      await showToast({ style: Toast.Style.Failure, title: "Failed to create task", message: String(error) });
+    }
+  }
+
+  async function handleUpdateTaskWrapped(updatedTask: Task) {
+    pushToUndoStack();
+    await updateTask(updatedTask, date);
+    loadTasks();
+  }
+
+  async function handleDeleteTaskWrapped(taskId: string) {
+    pushToUndoStack();
+    await deleteTask(taskId, date);
+    loadTasks();
   }
 
   const priorityOrder = { high: 3, medium: 2, low: 1 };
@@ -42,32 +121,6 @@ export default function TaskListView({ date }: TaskListViewProps) {
   const todoTasks = sortTasks(tasks.filter((t) => t.status === "todo"));
   const doneTasks = sortTasks(tasks.filter((t) => t.status === "done"));
 
-  async function handleCreateTask(values: { 
-    title: string; 
-    description: string; 
-    priority: string; 
-    github?: import("./types").GithubMetadata;
-    deadline?: Date | null;
-  }) {
-     try {
-       await createTask({
-         id: uuidv4(),
-         title: values.title,
-         description: values.description,
-         priority: values.priority as TaskPriority,
-         status: "todo",
-         createdAt: Date.now(),
-         github: values.github,
-         deadline: values.deadline ? values.deadline.getTime() : null,
-       }, date);
-       await showToast({ style: Toast.Style.Success, title: "Task added" });
-       loadTasks();
-     } catch (error) {
-       await showToast({ style: Toast.Style.Failure, title: "Failed to create task", message: String(error) });
-     }
-  }
-
-
   return (
     <List
       isLoading={isLoading}
@@ -79,29 +132,76 @@ export default function TaskListView({ date }: TaskListViewProps) {
             title="Add New Task"
             icon={Icon.Plus}
             shortcut={{ modifiers: ["cmd"], key: "n" }}
-            target={<TaskForm submitTitle="Create Task" onSubmit={handleCreateTask} />}
+            target={<TaskForm submitTitle="Create Task" onSubmit={handleCreateTaskWrapped} />}
           />
+          {undoStack.length > 0 && (
+            <Action title="Undo" icon={Icon.Undo} shortcut={{ modifiers: ["cmd"], key: "z" }} onAction={handleUndo} />
+          )}
+          {redoStack.length > 0 && (
+            <Action
+              title="Redo"
+              icon={Icon.Redo}
+              shortcut={{ modifiers: ["cmd", "shift"], key: "z" }}
+              onAction={handleRedo}
+            />
+          )}
         </ActionPanel>
       }
     >
       <List.Section title="In Progress" subtitle={`${inProgressTasks.length}`}>
         {inProgressTasks.map((task) => (
-          <TaskItem key={task.id} task={task} date={date} onUpdate={loadTasks} onCreate={handleCreateTask} />
+          <TaskItem
+            key={task.id}
+            task={task}
+            date={date}
+            onUpdateTask={handleUpdateTaskWrapped}
+            onCreateTask={handleCreateTaskWrapped}
+            onDeleteTask={handleDeleteTaskWrapped}
+            onUndo={undoStack.length > 0 ? handleUndo : undefined}
+            onRedo={redoStack.length > 0 ? handleRedo : undefined}
+          />
         ))}
       </List.Section>
       <List.Section title="Paused" subtitle={`${pausedTasks.length}`}>
         {pausedTasks.map((task) => (
-          <TaskItem key={task.id} task={task} date={date} onUpdate={loadTasks} onCreate={handleCreateTask} />
+          <TaskItem
+            key={task.id}
+            task={task}
+            date={date}
+            onUpdateTask={handleUpdateTaskWrapped}
+            onCreateTask={handleCreateTaskWrapped}
+            onDeleteTask={handleDeleteTaskWrapped}
+            onUndo={undoStack.length > 0 ? handleUndo : undefined}
+            onRedo={redoStack.length > 0 ? handleRedo : undefined}
+          />
         ))}
       </List.Section>
       <List.Section title="To-do" subtitle={`${todoTasks.length}`}>
         {todoTasks.map((task) => (
-          <TaskItem key={task.id} task={task} date={date} onUpdate={loadTasks} onCreate={handleCreateTask} />
+          <TaskItem
+            key={task.id}
+            task={task}
+            date={date}
+            onUpdateTask={handleUpdateTaskWrapped}
+            onCreateTask={handleCreateTaskWrapped}
+            onDeleteTask={handleDeleteTaskWrapped}
+            onUndo={undoStack.length > 0 ? handleUndo : undefined}
+            onRedo={redoStack.length > 0 ? handleRedo : undefined}
+          />
         ))}
       </List.Section>
       <List.Section title="Done" subtitle={`${doneTasks.length}`}>
         {doneTasks.map((task) => (
-          <TaskItem key={task.id} task={task} date={date} onUpdate={loadTasks} onCreate={handleCreateTask} />
+          <TaskItem
+            key={task.id}
+            task={task}
+            date={date}
+            onUpdateTask={handleUpdateTaskWrapped}
+            onCreateTask={handleCreateTaskWrapped}
+            onDeleteTask={handleDeleteTaskWrapped}
+            onUndo={undoStack.length > 0 ? handleUndo : undefined}
+            onRedo={redoStack.length > 0 ? handleRedo : undefined}
+          />
         ))}
       </List.Section>
       <List.EmptyView
@@ -113,8 +213,19 @@ export default function TaskListView({ date }: TaskListViewProps) {
               title="Add New Task"
               icon={Icon.Plus}
               shortcut={{ modifiers: ["cmd"], key: "n" }}
-              target={<TaskForm submitTitle="Create Task" onSubmit={handleCreateTask} />}
+              target={<TaskForm submitTitle="Create Task" onSubmit={handleCreateTaskWrapped} />}
             />
+            {undoStack.length > 0 && (
+              <Action title="Undo" icon={Icon.Undo} shortcut={{ modifiers: ["cmd"], key: "z" }} onAction={handleUndo} />
+            )}
+            {redoStack.length > 0 && (
+              <Action
+                title="Redo"
+                icon={Icon.Redo}
+                shortcut={{ modifiers: ["cmd", "shift"], key: "z" }}
+                onAction={handleRedo}
+              />
+            )}
           </ActionPanel>
         }
       />
@@ -125,13 +236,24 @@ export default function TaskListView({ date }: TaskListViewProps) {
 function TaskItem({
   task,
   date,
-  onUpdate,
-  onCreate,
+  onUpdateTask,
+  onCreateTask,
+  onDeleteTask,
+  onUndo,
+  onRedo,
 }: {
   task: Task;
   date: Date;
-  onUpdate: () => void;
-  onCreate: (values: { title: string; description: string; priority: string; deadline?: Date | null }) => Promise<void>;
+  onUpdateTask: (task: Task) => Promise<void>;
+  onCreateTask: (values: {
+    title: string;
+    description: string;
+    priority: string;
+    deadline?: Date | null;
+  }) => Promise<void>;
+  onDeleteTask: (taskId: string) => Promise<void>;
+  onUndo?: () => Promise<void>;
+  onRedo?: () => Promise<void>;
 }) {
   async function handleToggleStatus() {
     let newStatus: TaskStatus = "done";
@@ -140,18 +262,15 @@ function TaskItem({
     else if (task.status === "paused") newStatus = "in-progress";
     else if (task.status === "in-progress") newStatus = "done";
 
-    await updateTask({ ...task, status: newStatus }, date);
-    onUpdate();
+    await onUpdateTask({ ...task, status: newStatus });
   }
 
   async function handleSetStatus(status: TaskStatus) {
-    await updateTask({ ...task, status }, date);
-    onUpdate();
+    await onUpdateTask({ ...task, status });
   }
 
   async function handleDelete() {
-    await deleteTask(task.id, date);
-    onUpdate();
+    await onDeleteTask(task.id);
   }
 
   const priorityColor = task.priority === "high" ? Color.Red : task.priority === "medium" ? Color.Orange : Color.Green;
@@ -165,9 +284,7 @@ function TaskItem({
           ? { source: Icon.CircleProgress50, tintColor: Color.Blue }
           : { source: Icon.Circle };
 
-  const accessories: List.Item.Accessory[] = [
-    { tag: { value: task.priority, color: priorityColor } },
-  ];
+  const accessories: List.Item.Accessory[] = [{ tag: { value: task.priority, color: priorityColor } }];
 
   if (task.github) {
     let stateColor = Color.Green;
@@ -175,9 +292,9 @@ function TaskItem({
     if (task.github.state === "merged") stateColor = Color.Purple;
 
     accessories.unshift({
-        icon: { source: "github-mark.png", tintColor: Color.PrimaryText }, // using built-in icon if available or just text
-        tag: { value: `#${task.github.number}`, color: stateColor },
-        tooltip: `GitHub ${task.github.type === 'pull_request' ? 'PR' : 'Issue'}: ${task.github.state}`
+      icon: { source: "github-mark.png", tintColor: Color.PrimaryText }, // using built-in icon if available or just text
+      tag: { value: `#${task.github.number}`, color: stateColor },
+      tooltip: `GitHub ${task.github.type === "pull_request" ? "PR" : "Issue"}: ${task.github.state}`,
     });
   }
 
@@ -185,25 +302,32 @@ function TaskItem({
     <List.Item
       title={task.title}
       icon={icon}
-      accessories={[
-        ...(task.deadline ? [{ date: new Date(task.deadline), tooltip: "Deadline" }] : []),
-        ...accessories
-      ]}
+      accessories={[...(task.deadline ? [{ date: new Date(task.deadline), tooltip: "Deadline" }] : []), ...accessories]}
       actions={
         <ActionPanel>
-          {task.github && <Action.OpenInBrowser url={task.github.url} title="Open in GitHub" shortcut={{ modifiers: ["opt"], key: "enter" }} />}
-          <Action title={task.status === "done" ? "Mark as Undone" : "Mark as Done"} icon={Icon.CheckCircle} onAction={handleToggleStatus} />
+          {task.github && (
+            <Action.OpenInBrowser
+              url={task.github.url}
+              title="Open in GitHub"
+              shortcut={{ modifiers: ["opt"], key: "enter" }}
+            />
+          )}
+          <Action
+            title={task.status === "done" ? "Mark as Undone" : "Mark as Done"}
+            icon={Icon.CheckCircle}
+            onAction={handleToggleStatus}
+          />
           <Action.Push
             title="Show Details"
             icon={Icon.Sidebar}
             shortcut={{ modifiers: ["cmd"], key: "return" }}
-            target={<TaskDetail task={task} date={date} onUpdate={onUpdate} />}
+            target={<TaskDetail task={task} date={date} onUpdateTask={onUpdateTask} onUndo={onUndo} onRedo={onRedo} />}
           />
           <Action.Push
             title="Show Details"
             icon={Icon.Sidebar}
             shortcut={{ modifiers: ["cmd"], key: "arrowRight" }}
-            target={<TaskDetail task={task} date={date} onUpdate={onUpdate} />}
+            target={<TaskDetail task={task} date={date} onUpdateTask={onUpdateTask} onUndo={onUndo} onRedo={onRedo} />}
           />
           <Action.Push
             title="Edit Task"
@@ -219,17 +343,13 @@ function TaskItem({
                 }}
                 submitTitle="Update Task"
                 onSubmit={async (values) => {
-                  await updateTask(
-                    {
-                      ...task,
-                      ...values,
-                      priority: values.priority as TaskPriority,
-                      deadline: values.deadline ? values.deadline.getTime() : null,
-                    },
-                    date,
-                  );
+                  await onUpdateTask({
+                    ...task,
+                    ...values,
+                    priority: values.priority as TaskPriority,
+                    deadline: values.deadline ? values.deadline.getTime() : null,
+                  });
                   await showToast({ style: Toast.Style.Success, title: "Task updated" });
-                  onUpdate();
                 }}
               />
             }
@@ -256,7 +376,7 @@ function TaskItem({
             title="Add New Task"
             icon={Icon.Plus}
             shortcut={{ modifiers: ["cmd"], key: "n" }}
-            target={<TaskForm submitTitle="Create Task" onSubmit={onCreate} />}
+            target={<TaskForm submitTitle="Create Task" onSubmit={onCreateTask} />}
           />
           <Action
             title="Delete Task"
@@ -265,20 +385,49 @@ function TaskItem({
             shortcut={{ modifiers: ["ctrl"], key: "x" }}
             onAction={handleDelete}
           />
+          {onUndo && (
+            <Action title="Undo" icon={Icon.Undo} shortcut={{ modifiers: ["cmd"], key: "z" }} onAction={onUndo} />
+          )}
+          {onRedo && (
+            <Action
+              title="Redo"
+              icon={Icon.Redo}
+              shortcut={{ modifiers: ["cmd", "shift"], key: "z" }}
+              onAction={onRedo}
+            />
+          )}
         </ActionPanel>
       }
     />
   );
 }
 
-function TaskDetail({ task: initialTask, date, onUpdate }: { task: Task; date: Date; onUpdate: () => void }) {
+function TaskDetail({
+  task: initialTask,
+  date,
+  onUpdateTask,
+  onUndo,
+  onRedo,
+}: {
+  task: Task;
+  date: Date;
+  onUpdateTask: (task: Task) => Promise<void>;
+  onUndo?: () => Promise<void>;
+  onRedo?: () => Promise<void>;
+}) {
   const [task, setTask] = useState<Task>(initialTask);
+  const [isEditing, setIsEditing] = useState(false);
+  const { pop } = useNavigation();
+
+  // Sync local state if prop changes (e.g. if updated from parent)
+  useEffect(() => {
+    setTask(initialTask);
+  }, [initialTask]);
 
   async function handleSetStatus(status: TaskStatus) {
     const updatedTask = { ...task, status };
     setTask(updatedTask);
-    await updateTask(updatedTask, date);
-    onUpdate();
+    await onUpdateTask(updatedTask);
   }
 
   async function handleToggleStatus() {
@@ -289,6 +438,58 @@ function TaskDetail({ task: initialTask, date, onUpdate }: { task: Task; date: D
     else if (task.status === "in-progress") newStatus = "done";
 
     await handleSetStatus(newStatus);
+  }
+
+  async function handleUndoWrapped() {
+    if (onUndo) {
+      await onUndo();
+      await refreshTask();
+    }
+  }
+
+  async function handleRedoWrapped() {
+    if (onRedo) {
+      await onRedo();
+      await refreshTask();
+    }
+  }
+
+  async function refreshTask() {
+    // Refetch logic to sync this detail view
+    const freshTasks = await getTasks(date);
+    const freshTask = freshTasks.find((t) => t.id === task.id);
+    if (freshTask) {
+      setTask(freshTask);
+    } else {
+      // Task was likely created then undid creation, so it no longer exists.
+      pop();
+    }
+  }
+
+  if (isEditing) {
+    return (
+      <TaskForm
+        initialValues={{
+          title: task.title,
+          description: task.description,
+          priority: task.priority,
+          deadline: task.deadline ? new Date(task.deadline) : null,
+        }}
+        submitTitle="Save Description"
+        mode="description-only"
+        shouldPopAfterSubmit={false}
+        onSubmit={async (values) => {
+          const updatedTask = {
+            ...task,
+            description: values.description,
+          };
+          setTask(updatedTask);
+          setIsEditing(false);
+          await onUpdateTask(updatedTask);
+          await showToast({ style: Toast.Style.Success, title: "Description updated" });
+        }}
+      />
+    );
   }
 
   return (
@@ -323,16 +524,15 @@ function TaskDetail({ task: initialTask, date, onUpdate }: { task: Task; date: D
           <Detail.Metadata.Label title="Created" text={new Date(task.createdAt).toLocaleString()} />
           {task.github && (
             <>
-                <Detail.Metadata.Separator />
-                <Detail.Metadata.Label title="GitHub" text={`#${task.github.number}`} />
-                <Detail.Metadata.Label title="State" text={task.github.state} />
-                <Detail.Metadata.Link title="Link" target={task.github.url} text="Open" />
+              <Detail.Metadata.Separator />
+              <Detail.Metadata.Label title="GitHub" text={`#${task.github.number}`} />
+              <Detail.Metadata.Label title="State" text={task.github.state} />
+              <Detail.Metadata.Link title="Link" target={task.github.url} text="Open" />
             </>
           )}
           {task.deadline && (
             <Detail.Metadata.Label title="Deadline" text={new Date(task.deadline).toLocaleDateString()} />
           )}
-
         </Detail.Metadata>
       }
       actions={
@@ -341,6 +541,12 @@ function TaskDetail({ task: initialTask, date, onUpdate }: { task: Task; date: D
             title={task.status === "done" ? "Mark as Undone" : "Mark as Done"}
             icon={Icon.CheckCircle}
             onAction={handleToggleStatus}
+          />
+          <Action
+            title="Edit Description"
+            icon={Icon.Document}
+            shortcut={{ modifiers: ["cmd", "shift"], key: "e" }}
+            onAction={() => setIsEditing(true)}
           />
           <Action.Push
             title="Edit Task"
@@ -362,10 +568,9 @@ function TaskDetail({ task: initialTask, date, onUpdate }: { task: Task; date: D
                     priority: values.priority as TaskPriority,
                     deadline: values.deadline ? values.deadline.getTime() : null,
                   };
-                  await updateTask(updatedTask, date);
                   setTask(updatedTask);
+                  await onUpdateTask(updatedTask);
                   await showToast({ style: Toast.Style.Success, title: "Task updated" });
-                  onUpdate();
                 }}
               />
             }
@@ -388,6 +593,22 @@ function TaskDetail({ task: initialTask, date, onUpdate }: { task: Task; date: D
             <Action title="Paused" onAction={() => handleSetStatus("paused")} />
             <Action title="Done" onAction={() => handleSetStatus("done")} />
           </ActionPanel.Submenu>
+          {onUndo && (
+            <Action
+              title="Undo"
+              icon={Icon.Undo}
+              shortcut={{ modifiers: ["cmd"], key: "z" }}
+              onAction={handleUndoWrapped}
+            />
+          )}
+          {onRedo && (
+            <Action
+              title="Redo"
+              icon={Icon.Redo}
+              shortcut={{ modifiers: ["cmd", "shift"], key: "z" }}
+              onAction={handleRedoWrapped}
+            />
+          )}
         </ActionPanel>
       }
     />
