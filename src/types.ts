@@ -5,6 +5,7 @@ export interface Task {
   priority: TaskPriority;
   status: TaskStatus;
   createdAt: number;
+  deadline?: number | null;
 }
 
 export type TaskStatus = "todo" | "in-progress" | "paused" | "done";
