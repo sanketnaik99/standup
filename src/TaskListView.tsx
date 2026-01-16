@@ -26,7 +26,12 @@ export default function TaskListView({ date }: TaskListViewProps) {
 
   const priorityOrder = { high: 3, medium: 2, low: 1 };
   const sortTasks = (taskList: Task[]) => {
-    return [...taskList].sort((a, b) => priorityOrder[b.priority] - priorityOrder[a.priority]);
+    return [...taskList].sort((a, b) => {
+      if (a.deadline && !b.deadline) return -1;
+      if (!a.deadline && b.deadline) return 1;
+      if (a.deadline && b.deadline) return a.deadline - b.deadline;
+      return priorityOrder[b.priority] - priorityOrder[a.priority];
+    });
   };
 
   const inProgressTasks = sortTasks(tasks.filter((t) => t.status === "in-progress"));
@@ -34,45 +39,54 @@ export default function TaskListView({ date }: TaskListViewProps) {
   const todoTasks = sortTasks(tasks.filter((t) => t.status === "todo"));
   const doneTasks = sortTasks(tasks.filter((t) => t.status === "done"));
 
-  async function handleCreateTask(values: { title: string; description: string; priority: string }) {
-     try {
-       await createTask({
-         id: uuidv4(),
-         title: values.title,
-         description: values.description,
-         priority: values.priority as TaskPriority,
-         status: "todo",
-         createdAt: Date.now(),
-       }, date);
-       await showToast({ style: Toast.Style.Success, title: "Task added" });
-       loadTasks();
-     } catch (error) {
-       await showToast({ style: Toast.Style.Failure, title: "Failed to create task", message: String(error) });
-     }
+  async function handleCreateTask(values: {
+    title: string;
+    description: string;
+    priority: string;
+    deadline?: Date | null;
+  }) {
+    try {
+      await createTask(
+        {
+          id: uuidv4(),
+          title: values.title,
+          description: values.description,
+          priority: values.priority as TaskPriority,
+          status: "todo",
+          createdAt: Date.now(),
+          deadline: values.deadline ? values.deadline.getTime() : null,
+        },
+        date,
+      );
+      await showToast({ style: Toast.Style.Success, title: "Task added" });
+      loadTasks();
+    } catch (error) {
+      await showToast({ style: Toast.Style.Failure, title: "Failed to create task", message: String(error) });
+    }
   }
 
   return (
-    <List 
-        isLoading={isLoading} 
-        searchBarPlaceholder="Filter tasks..." 
-        navigationTitle={`Tasks for ${getDateString(date)}`}
-        actions={
-            <ActionPanel>
-                 <Action.Push
-                    title="Add New Task"
-                    icon={Icon.Plus}
-                    shortcut={{ modifiers: ["cmd"], key: "n" }}
-                    target={<TaskForm submitTitle="Create Task" onSubmit={handleCreateTask} />}
-                  />
-            </ActionPanel>
-        }
+    <List
+      isLoading={isLoading}
+      searchBarPlaceholder="Filter tasks..."
+      navigationTitle={`Tasks for ${getDateString(date)}`}
+      actions={
+        <ActionPanel>
+          <Action.Push
+            title="Add New Task"
+            icon={Icon.Plus}
+            shortcut={{ modifiers: ["cmd"], key: "n" }}
+            target={<TaskForm submitTitle="Create Task" onSubmit={handleCreateTask} />}
+          />
+        </ActionPanel>
+      }
     >
       <List.Section title="In Progress" subtitle={`${inProgressTasks.length}`}>
         {inProgressTasks.map((task) => (
           <TaskItem key={task.id} task={task} date={date} onUpdate={loadTasks} onCreate={handleCreateTask} />
         ))}
       </List.Section>
-       <List.Section title="Paused" subtitle={`${pausedTasks.length}`}>
+      <List.Section title="Paused" subtitle={`${pausedTasks.length}`}>
         {pausedTasks.map((task) => (
           <TaskItem key={task.id} task={task} date={date} onUpdate={loadTasks} onCreate={handleCreateTask} />
         ))}
@@ -87,7 +101,7 @@ export default function TaskListView({ date }: TaskListViewProps) {
           <TaskItem key={task.id} task={task} date={date} onUpdate={loadTasks} onCreate={handleCreateTask} />
         ))}
       </List.Section>
-       <List.EmptyView
+      <List.EmptyView
         title="No tasks for this day"
         description="Press Cmd+N to add a task"
         actions={
@@ -105,8 +119,17 @@ export default function TaskListView({ date }: TaskListViewProps) {
   );
 }
 
-// eslint-disable-next-line @typescript-eslint/no-explicit-any
-function TaskItem({ task, date, onUpdate, onCreate }: { task: Task; date: Date; onUpdate: () => void, onCreate: (values: any) => Promise<void> }) {
+function TaskItem({
+  task,
+  date,
+  onUpdate,
+  onCreate,
+}: {
+  task: Task;
+  date: Date;
+  onUpdate: () => void;
+  onCreate: (values: { title: string; description: string; priority: string; deadline?: Date | null }) => Promise<void>;
+}) {
   async function handleToggleStatus() {
     let newStatus: TaskStatus = "done";
     if (task.status === "done") newStatus = "todo";
@@ -128,28 +151,32 @@ function TaskItem({ task, date, onUpdate, onCreate }: { task: Task; date: Date; 
     onUpdate();
   }
 
-  const priorityColor =
-    task.priority === "high" ? Color.Red : task.priority === "medium" ? Color.Orange : Color.Green;
-  
+  const priorityColor = task.priority === "high" ? Color.Red : task.priority === "medium" ? Color.Orange : Color.Green;
+
   const icon =
     task.status === "done"
       ? { source: Icon.CheckCircle, tintColor: Color.Green }
       : task.status === "paused"
-      ? { source: Icon.Pause, tintColor: Color.Yellow }
-      : task.status === "in-progress"
-      ? { source: Icon.CircleProgress50, tintColor: Color.Blue }
-      : { source: Icon.Circle };
+        ? { source: Icon.Pause, tintColor: Color.Yellow }
+        : task.status === "in-progress"
+          ? { source: Icon.CircleProgress50, tintColor: Color.Blue }
+          : { source: Icon.Circle };
 
   return (
     <List.Item
       title={task.title}
       icon={icon}
       accessories={[
+        ...(task.deadline ? [{ date: new Date(task.deadline), tooltip: "Deadline" }] : []),
         { tag: { value: task.priority, color: priorityColor } },
       ]}
       actions={
         <ActionPanel>
-          <Action title={task.status === "done" ? "Mark as Undone" : "Mark as Done"} icon={Icon.CheckCircle} onAction={handleToggleStatus} />
+          <Action
+            title={task.status === "done" ? "Mark as Undone" : "Mark as Done"}
+            icon={Icon.CheckCircle}
+            onAction={handleToggleStatus}
+          />
           <Action.Push
             title="Show Details"
             icon={Icon.Sidebar}
@@ -163,20 +190,33 @@ function TaskItem({ task, date, onUpdate, onCreate }: { task: Task; date: Date; 
             target={<TaskDetail task={task} date={date} onUpdate={onUpdate} />}
           />
           <Action.Push
-             title="Edit Task"
-             icon={Icon.Pencil}
-             shortcut={{ modifiers: ["cmd"], key: "i" }}
-             target={
-               <TaskForm
-                 initialValues={{ title: task.title, description: task.description, priority: task.priority }}
-                 submitTitle="Update Task"
-                 onSubmit={async (values) => {
-                   await updateTask({ ...task, ...values, priority: values.priority as TaskPriority }, date);
-                   await showToast({ style: Toast.Style.Success, title: "Task updated" });
-                   onUpdate();
-                 }}
-               />
-             }
+            title="Edit Task"
+            icon={Icon.Pencil}
+            shortcut={{ modifiers: ["cmd"], key: "i" }}
+            target={
+              <TaskForm
+                initialValues={{
+                  title: task.title,
+                  description: task.description,
+                  priority: task.priority,
+                  deadline: task.deadline ? new Date(task.deadline) : null,
+                }}
+                submitTitle="Update Task"
+                onSubmit={async (values) => {
+                  await updateTask(
+                    {
+                      ...task,
+                      ...values,
+                      priority: values.priority as TaskPriority,
+                      deadline: values.deadline ? values.deadline.getTime() : null,
+                    },
+                    date,
+                  );
+                  await showToast({ style: Toast.Style.Success, title: "Task updated" });
+                  onUpdate();
+                }}
+              />
+            }
           />
           <Action
             title="Pause Task"
@@ -187,16 +227,16 @@ function TaskItem({ task, date, onUpdate, onCreate }: { task: Task; date: Date; 
           <Action
             title="Start Task"
             icon={Icon.Play}
-             shortcut={{ modifiers: ["cmd", "shift"], key: "s" }}
+            shortcut={{ modifiers: ["cmd", "shift"], key: "s" }}
             onAction={() => handleSetStatus("in-progress")}
           />
-            <ActionPanel.Submenu title="Change Status" icon={Icon.Pencil}>
-                <Action title="In Progress" onAction={() => handleSetStatus("in-progress")} />
-                <Action title="To-Do" onAction={() => handleSetStatus("todo")} />
-                <Action title="Paused" onAction={() => handleSetStatus("paused")} />
-                <Action title="Done" onAction={() => handleSetStatus("done")} />
-            </ActionPanel.Submenu>
-           <Action.Push
+          <ActionPanel.Submenu title="Change Status" icon={Icon.Pencil}>
+            <Action title="In Progress" onAction={() => handleSetStatus("in-progress")} />
+            <Action title="To-Do" onAction={() => handleSetStatus("todo")} />
+            <Action title="Paused" onAction={() => handleSetStatus("paused")} />
+            <Action title="Done" onAction={() => handleSetStatus("done")} />
+          </ActionPanel.Submenu>
+          <Action.Push
             title="Add New Task"
             icon={Icon.Plus}
             shortcut={{ modifiers: ["cmd"], key: "n" }}
@@ -221,29 +261,67 @@ function TaskDetail({ task, date, onUpdate }: { task: Task; date: Date; onUpdate
       markdown={`# ${task.title}\n\n${task.description}`}
       metadata={
         <Detail.Metadata>
-          <Detail.Metadata.Label title="Status" text={task.status} />
-          <Detail.Metadata.Label title="Priority" text={task.priority} />
+          <Detail.Metadata.TagList title="Status">
+            <Detail.Metadata.TagList.Item
+              text={
+                task.status === "in-progress"
+                  ? "In Progress"
+                  : task.status.replace(/-/g, " ").replace(/\b\w/g, (l) => l.toUpperCase())
+              }
+              color={
+                task.status === "done"
+                  ? Color.Green
+                  : task.status === "paused"
+                    ? Color.Yellow
+                    : task.status === "in-progress"
+                      ? Color.Blue
+                      : Color.SecondaryText
+              }
+            />
+          </Detail.Metadata.TagList>
+          <Detail.Metadata.TagList title="Priority">
+            <Detail.Metadata.TagList.Item
+              text={task.priority.charAt(0).toUpperCase() + task.priority.slice(1)}
+              color={task.priority === "high" ? Color.Red : task.priority === "medium" ? Color.Orange : Color.Green}
+            />
+          </Detail.Metadata.TagList>
           <Detail.Metadata.Label title="Created" text={new Date(task.createdAt).toLocaleString()} />
+          {task.deadline && (
+            <Detail.Metadata.Label title="Deadline" text={new Date(task.deadline).toLocaleDateString()} />
+          )}
         </Detail.Metadata>
       }
       actions={
         <ActionPanel>
-            <Action.Push
-                title="Edit Task"
-                icon={Icon.Pencil}
-                shortcut={{ modifiers: ["cmd"], key: "i" }}
-                target={
-                <TaskForm
-                    initialValues={{ title: task.title, description: task.description, priority: task.priority }}
-                    submitTitle="Update Task"
-                    onSubmit={async (values) => {
-                    await updateTask({ ...task, ...values, priority: values.priority as TaskPriority }, date);
-                    await showToast({ style: Toast.Style.Success, title: "Task updated" });
-                    onUpdate();
-                    }}
-                />
-                }
-            />
+          <Action.Push
+            title="Edit Task"
+            icon={Icon.Pencil}
+            shortcut={{ modifiers: ["cmd"], key: "i" }}
+            target={
+              <TaskForm
+                initialValues={{
+                  title: task.title,
+                  description: task.description,
+                  priority: task.priority,
+                  deadline: task.deadline ? new Date(task.deadline) : null,
+                }}
+                submitTitle="Update Task"
+                onSubmit={async (values) => {
+                  await updateTask(
+                    {
+                      ...task,
+                      ...values,
+                      priority: values.priority as TaskPriority,
+                      deadline: values.deadline ? values.deadline.getTime() : null,
+                    },
+                    date,
+                  );
+                  await showToast({ style: Toast.Style.Success, title: "Task updated" });
+                  onUpdate();
+                }}
+              />
+            }
+          />
         </ActionPanel>
       }
     />

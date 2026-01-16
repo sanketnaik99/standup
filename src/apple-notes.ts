@@ -5,7 +5,7 @@ import { getDateString } from "./utils";
 export async function syncDailyNote(date: Date, tasks: Task[]): Promise<void> {
   const noteTitle = `Tasks ${getDateString(date)}`;
   const folderName = "Tasks";
-  
+
   const generateHTML = (tasks: Task[]) => {
     // Basic styling for the note
     const style = `
@@ -23,17 +23,21 @@ export async function syncDailyNote(date: Date, tasks: Task[]): Promise<void> {
     `;
 
     const getIcon = (status: string) => {
-        switch(status) {
-            case "done": return "✅";
-            case "in-progress": return "🚧";
-            case "paused": return "⏸️";
-            default: return "⬜";
-        }
+      switch (status) {
+        case "done":
+          return "✅";
+        case "in-progress":
+          return "🚧";
+        case "paused":
+          return "⏸️";
+        default:
+          return "⬜";
+      }
     };
 
     const renderTask = (t: Task) => {
-        const priorityLabel = t.priority === "high" ? "🔴" : t.priority === "medium" ? "🟠" : "🟢";
-        return `
+      const priorityLabel = t.priority === "high" ? "🔴" : t.priority === "medium" ? "🟠" : "🟢";
+      return `
           <div class="task ${t.status}">
             ${getIcon(t.status)} <strong>${t.title}</strong> ${priorityLabel} <br/>
             <span style="font-size: 0.9em; color: #666;">${t.description.replace(/\n/g, "<br/>")}</span>
@@ -44,7 +48,11 @@ export async function syncDailyNote(date: Date, tasks: Task[]): Promise<void> {
 
     const priorityOrder = { high: 3, medium: 2, low: 1 };
     const sortTasks = (taskList: Task[]) => {
-      return [...taskList].sort((a, b) => priorityOrder[b.priority as keyof typeof priorityOrder] - priorityOrder[a.priority as keyof typeof priorityOrder]);
+      return [...taskList].sort(
+        (a, b) =>
+          priorityOrder[b.priority as keyof typeof priorityOrder] -
+          priorityOrder[a.priority as keyof typeof priorityOrder],
+      );
     };
 
     const inProgressTasks = sortTasks(tasks.filter((t) => t.status === "in-progress"));
@@ -53,17 +61,21 @@ export async function syncDailyNote(date: Date, tasks: Task[]): Promise<void> {
     const doneTasks = sortTasks(tasks.filter((t) => t.status === "done"));
 
     const sections = [
-        { title: "In Progress", list: inProgressTasks },
-        { title: "Paused", list: pausedTasks },
-        { title: "To Do", list: todoTasks },
-        { title: "Done", list: doneTasks }
-    ].filter(s => s.list.length > 0);
+      { title: "In Progress", list: inProgressTasks },
+      { title: "Paused", list: pausedTasks },
+      { title: "To Do", list: todoTasks },
+      { title: "Done", list: doneTasks },
+    ].filter((s) => s.list.length > 0);
 
-    const renderedHtml = sections.map(s => `
+    const renderedHtml = sections
+      .map(
+        (s) => `
         <h2>${s.title}</h2>
         <br/>
         ${s.list.map(renderTask).join("")}
-    `).join("<br/>-----------<br/>");
+    `,
+      )
+      .join("<br/>-----------<br/>");
 
     return `
       ${style}
@@ -99,8 +111,8 @@ export async function syncDailyNote(date: Date, tasks: Task[]): Promise<void> {
   `;
 
   try {
-     await runAppleScript(script);
+    await runAppleScript(script);
   } catch (error) {
-     console.error("Failed to sync to Apple Notes", error);
+    console.error("Failed to sync to Apple Notes", error);
   }
 }

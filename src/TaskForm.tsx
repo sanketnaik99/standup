@@ -5,6 +5,7 @@ interface FormValues {
   title: string;
   description: string;
   priority: string;
+  deadline?: Date | null;
 }
 
 interface TaskFormProps {
@@ -23,7 +24,7 @@ export default function TaskForm({ initialValues, submitTitle = "Submit", onSubm
       await onSubmit(values);
       pop();
     } catch {
-        // Error handling should be done by the parent or here if we want consistent toasts
+      // Error handling should be done by the parent or here if we want consistent toasts
     } finally {
       setIsLoading(false);
     }
@@ -38,27 +39,19 @@ export default function TaskForm({ initialValues, submitTitle = "Submit", onSubm
         </ActionPanel>
       }
     >
-      <Form.TextField
-        id="title"
-        title="Title"
-        placeholder="Enter task title"
-        defaultValue={initialValues?.title}
-      />
+      <Form.TextField id="title" title="Title" placeholder="Enter task title" defaultValue={initialValues?.title} />
       <Form.TextArea
         id="description"
         title="Description"
         placeholder="Enter task description (Markdown supported)"
         defaultValue={initialValues?.description}
       />
-      <Form.Dropdown
-        id="priority"
-        title="Priority"
-        defaultValue={initialValues?.priority || "medium"}
-      >
+      <Form.Dropdown id="priority" title="Priority" defaultValue={initialValues?.priority || "medium"}>
         <Form.Dropdown.Item value="low" title="Low" />
         <Form.Dropdown.Item value="medium" title="Medium" />
         <Form.Dropdown.Item value="high" title="High" />
       </Form.Dropdown>
+      <Form.DatePicker id="deadline" title="Deadline" defaultValue={initialValues?.deadline} />
     </Form>
   );
 }
