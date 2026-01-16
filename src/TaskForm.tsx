@@ -9,6 +9,7 @@ interface FormValues {
   description: string;
   priority: string;
   github?: GithubMetadata;
+  deadline?: Date | null;
 }
 
 interface TaskFormProps {
@@ -27,6 +28,7 @@ export default function TaskForm({ initialValues, submitTitle = "Submit", onSubm
       description: initialValues?.description || "",
       priority: initialValues?.priority || "medium",
       github: initialValues?.github,
+      deadline: initialValues?.deadline,
     },
     validation: {
       title: FormValidation.Required,
@@ -93,6 +95,7 @@ export default function TaskForm({ initialValues, submitTitle = "Submit", onSubm
         <Form.Dropdown.Item value="medium" title="Medium" />
         <Form.Dropdown.Item value="high" title="High" />
       </Form.Dropdown>
+      <Form.DatePicker {...itemProps.deadline} title="Deadline" />
     </Form>
   );
 }

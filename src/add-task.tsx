@@ -41,4 +41,3 @@ export default function Command() {
 
   return <TaskForm submitTitle="Add Task" onSubmit={handleSubmit} />;
 }
-

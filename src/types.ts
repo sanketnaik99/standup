@@ -6,6 +6,7 @@ export interface Task {
   status: TaskStatus;
   createdAt: number;
   github?: GithubMetadata;
+  deadline?: number | null;
 }
 
 export interface GithubMetadata {

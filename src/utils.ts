@@ -9,7 +9,7 @@ export function getDateString(date: Date): string {
 
 export async function getTasks(date: Date): Promise<Task[]> {
   const dateKey = `${TASKS_KEY_PREFIX}${getDateString(date)}`;
-  
+
   // Migration logic: Check for old "tasks" key
   const oldData = await LocalStorage.getItem<string>("tasks");
   if (oldData) {
@@ -17,9 +17,11 @@ export async function getTasks(date: Date): Promise<Task[]> {
     await LocalStorage.removeItem("tasks");
     await LocalStorage.setItem(todayKey, oldData);
     if (dateKey === todayKey) {
-        try {
-            return JSON.parse(oldData);
-        } catch { return []; } 
+      try {
+        return JSON.parse(oldData);
+      } catch {
+        return [];
+      }
     }
   }
 
@@ -37,9 +39,9 @@ import { syncDailyNote } from "./apple-notes";
 export async function saveTasks(date: Date, tasks: Task[]): Promise<void> {
   const dateKey = `${TASKS_KEY_PREFIX}${getDateString(date)}`;
   await LocalStorage.setItem(dateKey, JSON.stringify(tasks));
-  
+
   // Fire and forget sync to avoid blocking UI
-  syncDailyNote(date, tasks).catch(e => console.error("Background sync failed", e));
+  syncDailyNote(date, tasks).catch((e) => console.error("Background sync failed", e));
 }
 
 export async function createTask(task: Task, date: Date = new Date()): Promise<void> {
