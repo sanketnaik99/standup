@@ -39,31 +39,31 @@ export default function TaskListView({ date }: TaskListViewProps) {
   const todoTasks = sortTasks(tasks.filter((t) => t.status === "todo"));
   const doneTasks = sortTasks(tasks.filter((t) => t.status === "done"));
 
-  async function handleCreateTask(values: {
-    title: string;
-    description: string;
-    priority: string;
+  async function handleCreateTask(values: { 
+    title: string; 
+    description: string; 
+    priority: string; 
+    github?: import("./types").GithubMetadata;
     deadline?: Date | null;
   }) {
-    try {
-      await createTask(
-        {
-          id: uuidv4(),
-          title: values.title,
-          description: values.description,
-          priority: values.priority as TaskPriority,
-          status: "todo",
-          createdAt: Date.now(),
-          deadline: values.deadline ? values.deadline.getTime() : null,
-        },
-        date,
-      );
-      await showToast({ style: Toast.Style.Success, title: "Task added" });
-      loadTasks();
-    } catch (error) {
-      await showToast({ style: Toast.Style.Failure, title: "Failed to create task", message: String(error) });
-    }
+     try {
+       await createTask({
+         id: uuidv4(),
+         title: values.title,
+         description: values.description,
+         priority: values.priority as TaskPriority,
+         status: "todo",
+         createdAt: Date.now(),
+         github: values.github,
+         deadline: values.deadline ? values.deadline.getTime() : null,
+       }, date);
+       await showToast({ style: Toast.Style.Success, title: "Task added" });
+       loadTasks();
+     } catch (error) {
+       await showToast({ style: Toast.Style.Failure, title: "Failed to create task", message: String(error) });
+     }
   }
+
 
   return (
     <List
@@ -162,21 +162,34 @@ function TaskItem({
           ? { source: Icon.CircleProgress50, tintColor: Color.Blue }
           : { source: Icon.Circle };
 
+  const accessories: List.Item.Accessory[] = [
+    { tag: { value: task.priority, color: priorityColor } },
+  ];
+
+  if (task.github) {
+    let stateColor = Color.Green;
+    if (task.github.state === "closed") stateColor = Color.Red;
+    if (task.github.state === "merged") stateColor = Color.Purple;
+
+    accessories.unshift({
+        icon: { source: "github-mark.png", tintColor: Color.PrimaryText }, // using built-in icon if available or just text
+        tag: { value: `#${task.github.number}`, color: stateColor },
+        tooltip: `GitHub ${task.github.type === 'pull_request' ? 'PR' : 'Issue'}: ${task.github.state}`
+    });
+  }
+
   return (
     <List.Item
       title={task.title}
       icon={icon}
       accessories={[
         ...(task.deadline ? [{ date: new Date(task.deadline), tooltip: "Deadline" }] : []),
-        { tag: { value: task.priority, color: priorityColor } },
+        ...accessories
       ]}
       actions={
         <ActionPanel>
-          <Action
-            title={task.status === "done" ? "Mark as Undone" : "Mark as Done"}
-            icon={Icon.CheckCircle}
-            onAction={handleToggleStatus}
-          />
+          {task.github && <Action.OpenInBrowser url={task.github.url} title="Open in GitHub" shortcut={{ modifiers: ["opt"], key: "enter" }} />}
+          <Action title={task.status === "done" ? "Mark as Undone" : "Mark as Done"} icon={Icon.CheckCircle} onAction={handleToggleStatus} />
           <Action.Push
             title="Show Details"
             icon={Icon.Sidebar}
@@ -286,9 +299,18 @@ function TaskDetail({ task, date, onUpdate }: { task: Task; date: Date; onUpdate
             />
           </Detail.Metadata.TagList>
           <Detail.Metadata.Label title="Created" text={new Date(task.createdAt).toLocaleString()} />
+          {task.github && (
+            <>
+                <Detail.Metadata.Separator />
+                <Detail.Metadata.Label title="GitHub" text={`#${task.github.number}`} />
+                <Detail.Metadata.Label title="State" text={task.github.state} />
+                <Detail.Metadata.Link title="Link" target={task.github.url} text="Open" />
+            </>
+          )}
           {task.deadline && (
             <Detail.Metadata.Label title="Deadline" text={new Date(task.deadline).toLocaleDateString()} />
           )}
+
         </Detail.Metadata>
       }
       actions={
