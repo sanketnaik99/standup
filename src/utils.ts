@@ -64,3 +64,55 @@ export async function deleteTask(taskId: string, date: Date = new Date()): Promi
   const newTasks = tasks.filter((t) => t.id !== taskId);
   await saveTasks(date, newTasks);
 }
+
+export async function migrateTasksToToday(): Promise<number> {
+  const today = new Date();
+  const todayStr = getDateString(today);
+  const allItems = await LocalStorage.allItems();
+  let migratoryCount = 0;
+  const migratedTasks: Task[] = [];
+
+  for (const [key, value] of Object.entries(allItems)) {
+    if (!key.startsWith(TASKS_KEY_PREFIX)) continue;
+
+    // Extract date string
+    const dateStr = key.slice(TASKS_KEY_PREFIX.length);
+    if (dateStr >= todayStr) continue; // Skip today and future
+
+    try {
+      const tasks: Task[] = JSON.parse(value);
+      let hasChanges = false;
+      const remainingTasks: Task[] = [];
+
+      for (const task of tasks) {
+        if (task.status !== "done") {
+          migratedTasks.push(task);
+          migratoryCount++;
+          hasChanges = true;
+        } else {
+          remainingTasks.push(task);
+        }
+      }
+
+      if (hasChanges) {
+        await LocalStorage.setItem(key, JSON.stringify(remainingTasks));
+      }
+    } catch (e) {
+      console.error(`Failed to parse tasks for key ${key}`, e);
+    }
+  }
+
+  if (migratedTasks.length > 0) {
+    const todayTasks = await getTasks(today);
+    // Avoid duplicates by ID
+    const existingIds = new Set(todayTasks.map((t) => t.id));
+    const uniqueMigrated = migratedTasks.filter((t) => !existingIds.has(t.id));
+
+    if (uniqueMigrated.length > 0) {
+      const newTaskList = [...todayTasks, ...uniqueMigrated];
+      await saveTasks(today, newTaskList);
+    }
+  }
+
+  return migratoryCount;
+}
