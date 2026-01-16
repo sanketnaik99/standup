@@ -258,7 +258,26 @@ function TaskItem({
   );
 }
 
-function TaskDetail({ task, date, onUpdate }: { task: Task; date: Date; onUpdate: () => void }) {
+function TaskDetail({ task: initialTask, date, onUpdate }: { task: Task; date: Date; onUpdate: () => void }) {
+  const [task, setTask] = useState<Task>(initialTask);
+
+  async function handleSetStatus(status: TaskStatus) {
+    const updatedTask = { ...task, status };
+    setTask(updatedTask);
+    await updateTask(updatedTask, date);
+    onUpdate();
+  }
+
+  async function handleToggleStatus() {
+    let newStatus: TaskStatus = "done";
+    if (task.status === "done") newStatus = "todo";
+    else if (task.status === "todo") newStatus = "done";
+    else if (task.status === "paused") newStatus = "in-progress";
+    else if (task.status === "in-progress") newStatus = "done";
+
+    await handleSetStatus(newStatus);
+  }
+
   return (
     <Detail
       markdown={`# ${task.title}\n\n${task.description}`}
@@ -296,6 +315,11 @@ function TaskDetail({ task, date, onUpdate }: { task: Task; date: Date; onUpdate
       }
       actions={
         <ActionPanel>
+          <Action
+            title={task.status === "done" ? "Mark as Undone" : "Mark as Done"}
+            icon={Icon.CheckCircle}
+            onAction={handleToggleStatus}
+          />
           <Action.Push
             title="Edit Task"
             icon={Icon.Pencil}
@@ -310,21 +334,38 @@ function TaskDetail({ task, date, onUpdate }: { task: Task; date: Date; onUpdate
                 }}
                 submitTitle="Update Task"
                 onSubmit={async (values) => {
-                  await updateTask(
-                    {
-                      ...task,
-                      ...values,
-                      priority: values.priority as TaskPriority,
-                      deadline: values.deadline ? values.deadline.getTime() : null,
-                    },
-                    date,
-                  );
+                  const updatedTask = {
+                    ...task,
+                    ...values,
+                    priority: values.priority as TaskPriority,
+                    deadline: values.deadline ? values.deadline.getTime() : null,
+                  };
+                  await updateTask(updatedTask, date);
+                  setTask(updatedTask);
                   await showToast({ style: Toast.Style.Success, title: "Task updated" });
                   onUpdate();
                 }}
               />
             }
           />
+          <Action
+            title="Pause Task"
+            icon={Icon.Pause}
+            shortcut={{ modifiers: ["cmd", "shift"], key: "p" }}
+            onAction={() => handleSetStatus("paused")}
+          />
+          <Action
+            title="Start Task"
+            icon={Icon.Play}
+            shortcut={{ modifiers: ["cmd", "shift"], key: "s" }}
+            onAction={() => handleSetStatus("in-progress")}
+          />
+          <ActionPanel.Submenu title="Change Status" icon={Icon.Pencil}>
+            <Action title="In Progress" onAction={() => handleSetStatus("in-progress")} />
+            <Action title="To-Do" onAction={() => handleSetStatus("todo")} />
+            <Action title="Paused" onAction={() => handleSetStatus("paused")} />
+            <Action title="Done" onAction={() => handleSetStatus("done")} />
+          </ActionPanel.Submenu>
         </ActionPanel>
       }
     />
