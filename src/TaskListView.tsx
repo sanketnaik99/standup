@@ -1,7 +1,7 @@
 import { Action, ActionPanel, Color, Detail, Icon, List, showToast, Toast } from "@raycast/api";
 import { useEffect, useState } from "react";
 import { Task, TaskPriority, TaskStatus } from "./types";
-import { deleteTask, getDateString, getTasks, updateTask, createTask } from "./utils";
+import { deleteTask, getDateString, getTasks, updateTask, createTask, migrateTasksToToday } from "./utils";
 import TaskForm from "./TaskForm";
 import { v4 as uuidv4 } from "uuid";
 
@@ -19,6 +19,9 @@ export default function TaskListView({ date }: TaskListViewProps) {
 
   async function loadTasks() {
     setIsLoading(true);
+    if (getDateString(date) === getDateString(new Date())) {
+      await migrateTasksToToday();
+    }
     const loadedTasks = await getTasks(date);
     setTasks(loadedTasks);
     setIsLoading(false);
