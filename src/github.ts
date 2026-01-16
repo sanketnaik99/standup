@@ -20,7 +20,10 @@ export async function fetchGithubDetails(url: string): Promise<{ metadata: Githu
   if (!parsed) return null;
 
   const { githubToken } = getPreferenceValues<{ githubToken?: string }>();
-  
+
+  // If no token, we can still try to fetch public repos if we don't pass auth,
+  // but Octokit usually works better with auth.
+  // We'll try without auth if token is missing, or with auth if present.
   const octokit = new Octokit({
     auth: githubToken,
   });

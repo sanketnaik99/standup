@@ -5,7 +5,12 @@ import { TaskPriority } from "./types";
 import TaskForm from "./TaskForm";
 
 export default function Command() {
-  async function handleSubmit(values: { title: string; description: string; priority: string; github?: import("./types").GithubMetadata }) {
+  async function handleSubmit(values: {
+    title: string;
+    description: string;
+    priority: string;
+    github?: import("./types").GithubMetadata;
+  }) {
     if (!values.title) {
       await showToast({
         style: Toast.Style.Failure,

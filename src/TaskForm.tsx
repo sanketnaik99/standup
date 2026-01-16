@@ -17,9 +17,17 @@ interface TaskFormProps {
   initialValues?: FormValues;
   submitTitle?: string;
   onSubmit: (values: FormValues) => Promise<void>;
+  mode?: "full" | "description-only";
+  shouldPopAfterSubmit?: boolean;
 }
 
-export default function TaskForm({ initialValues, submitTitle = "Submit", onSubmit }: TaskFormProps) {
+export default function TaskForm({
+  initialValues,
+  submitTitle = "Submit",
+  onSubmit,
+  mode = "full",
+  shouldPopAfterSubmit = true,
+}: TaskFormProps) {
   const { pop } = useNavigation();
   const [isFetching, setIsFetching] = useState(false);
   const [github, setGithub] = useState<GithubMetadata | undefined>(initialValues?.github);
@@ -32,12 +40,14 @@ export default function TaskForm({ initialValues, submitTitle = "Submit", onSubm
       deadline: initialValues?.deadline,
     },
     validation: {
-      title: FormValidation.Required,
+      title: mode === "full" ? FormValidation.Required : undefined,
     },
     onSubmit: async (values) => {
       try {
         await onSubmit({ ...values, github });
-        pop();
+        if (shouldPopAfterSubmit) {
+          pop();
+        }
       } catch (error) {
         // Error handling is expected to be done by the parent or global error handler
       }
@@ -91,31 +101,37 @@ export default function TaskForm({ initialValues, submitTitle = "Submit", onSubm
         </ActionPanel>
       }
     >
-      <Form.TextField
-        {...itemProps.githubUrl}
-        title="GitHub Link"
-        placeholder="Paste GitHub Issue or PR URL"
-        onChange={handleGithubUrlChange}
-      />
-      <Form.TextField
-        {...itemProps.title}
-        title="Title"
-        placeholder="Enter task title"
-      />
+      {mode === "full" && (
+        <>
+          <Form.TextField
+            {...itemProps.githubUrl}
+            title="GitHub Link"
+            placeholder="Paste GitHub Issue or PR URL"
+            onChange={handleGithubUrlChange}
+          />
+          <Form.TextField
+            {...itemProps.title}
+            title="Title"
+            placeholder="Enter task title"
+          />
+        </>
+      )}
       <Form.TextArea
         {...itemProps.description}
         title="Description"
         placeholder="Enter task description (Markdown supported)"
+        enableMarkdown
       />
-      <Form.Dropdown
-        {...itemProps.priority}
-        title="Priority"
-      >
-        <Form.Dropdown.Item value="low" title="Low" />
-        <Form.Dropdown.Item value="medium" title="Medium" />
-        <Form.Dropdown.Item value="high" title="High" />
-      </Form.Dropdown>
-      <Form.DatePicker {...itemProps.deadline} title="Deadline" />
+      {mode === "full" && (
+        <>
+          <Form.Dropdown {...itemProps.priority} title="Priority">
+            <Form.Dropdown.Item value="low" title="Low" />
+            <Form.Dropdown.Item value="medium" title="Medium" />
+            <Form.Dropdown.Item value="high" title="High" />
+          </Form.Dropdown>
+          <Form.DatePicker {...itemProps.deadline} title="Deadline" />
+        </>
+      )}
     </Form>
   );
 }
