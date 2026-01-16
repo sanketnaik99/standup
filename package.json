@@ -43,7 +43,17 @@
       "mode": "view"
     }
   ],
+  "preferences": [
+    {
+      "name": "githubToken",
+      "type": "password",
+      "required": false,
+      "title": "GitHub Personal Access Token",
+      "description": "Required to fetch issue details. Create one at https://github.com/settings/tokens with 'repo' scope."
+    }
+  ],
   "dependencies": {
+    "@octokit/rest": "^22.0.1",
     "@raycast/api": "^1.104.1",
     "@raycast/utils": "^1.17.0",
     "uuid": "^13.0.0"

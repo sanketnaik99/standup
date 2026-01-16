@@ -34,7 +34,7 @@ export default function TaskListView({ date }: TaskListViewProps) {
   const todoTasks = sortTasks(tasks.filter((t) => t.status === "todo"));
   const doneTasks = sortTasks(tasks.filter((t) => t.status === "done"));
 
-  async function handleCreateTask(values: { title: string; description: string; priority: string }) {
+  async function handleCreateTask(values: { title: string; description: string; priority: string; github?: import("./types").GithubMetadata }) {
      try {
        await createTask({
          id: uuidv4(),
@@ -43,6 +43,7 @@ export default function TaskListView({ date }: TaskListViewProps) {
          priority: values.priority as TaskPriority,
          status: "todo",
          createdAt: Date.now(),
+         github: values.github,
        }, date);
        await showToast({ style: Toast.Style.Success, title: "Task added" });
        loadTasks();
@@ -140,15 +141,30 @@ function TaskItem({ task, date, onUpdate, onCreate }: { task: Task; date: Date; 
       ? { source: Icon.CircleProgress50, tintColor: Color.Blue }
       : { source: Icon.Circle };
 
+  const accessories: List.Item.Accessory[] = [
+    { tag: { value: task.priority, color: priorityColor } },
+  ];
+
+  if (task.github) {
+    let stateColor = Color.Green;
+    if (task.github.state === "closed") stateColor = Color.Red;
+    if (task.github.state === "merged") stateColor = Color.Purple;
+
+    accessories.unshift({
+        icon: { source: "github-mark.png", tintColor: Color.PrimaryText }, // using built-in icon if available or just text
+        tag: { value: `#${task.github.number}`, color: stateColor },
+        tooltip: `GitHub ${task.github.type === 'pull_request' ? 'PR' : 'Issue'}: ${task.github.state}`
+    });
+  }
+
   return (
     <List.Item
       title={task.title}
       icon={icon}
-      accessories={[
-        { tag: { value: task.priority, color: priorityColor } },
-      ]}
+      accessories={accessories}
       actions={
         <ActionPanel>
+          {task.github && <Action.OpenInBrowser url={task.github.url} title="Open in GitHub" shortcut={{ modifiers: ["opt"], key: "enter" }} />}
           <Action title={task.status === "done" ? "Mark as Undone" : "Mark as Done"} icon={Icon.CheckCircle} onAction={handleToggleStatus} />
           <Action.Push
             title="Show Details"
@@ -224,6 +240,14 @@ function TaskDetail({ task, date, onUpdate }: { task: Task; date: Date; onUpdate
           <Detail.Metadata.Label title="Status" text={task.status} />
           <Detail.Metadata.Label title="Priority" text={task.priority} />
           <Detail.Metadata.Label title="Created" text={new Date(task.createdAt).toLocaleString()} />
+          {task.github && (
+            <>
+                <Detail.Metadata.Separator />
+                <Detail.Metadata.Label title="GitHub" text={`#${task.github.number}`} />
+                <Detail.Metadata.Label title="State" text={task.github.state} />
+                <Detail.Metadata.Link title="Link" target={task.github.url} text="Open" />
+            </>
+          )}
         </Detail.Metadata>
       }
       actions={
