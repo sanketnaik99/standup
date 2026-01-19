@@ -38,8 +38,8 @@ export async function syncDailyNote(date: Date, tasks: Task[], profile: string):
         const renderTask = (t: Task) => {
             const priorityLabel = t.priority === "high" ? "🔴" : t.priority === "medium" ? "🟠" : "🟢";
             return `
-          <div class="task ${t.status}">
-            ${getIcon(t.status)} <strong>${t.title}</strong> ${priorityLabel} <br/>
+            ${getIcon(t.status)} <strong>${t.title}</strong> ${priorityLabel} ${t.deadline ? `📅 ${new Date(t.deadline).toLocaleDateString()}` : ""
+                }<br/>
             <span style="font-size: 0.9em; color: #666;">${t.description.replace(/\n/g, "<br/>")}</span>
           </div>
           <hr/>
