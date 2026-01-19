@@ -100,12 +100,18 @@ export default function TaskListView({ date }: TaskListViewProps) {
             tasksToRefresh.map(async (task) => {
                 if (!task.github) return;
                 const freshDetails = await fetchGithubDetails(task.github.url);
-                if (freshDetails && freshDetails.metadata.state !== task.github.state) {
+                if (!freshDetails) return;
+
+                const stateChanged = freshDetails.metadata.state !== task.github.state;
+                const currentPRs = task.github?.linkedPRs ?? [];
+                const newPRs = freshDetails.metadata.linkedPRs ?? [];
+                const linkedPRsChanged = JSON.stringify(currentPRs) !== JSON.stringify(newPRs);
+
+                if (stateChanged || linkedPRsChanged) {
                     const index = updatedTasks.findIndex((t) => t.id === task.id);
                     if (index !== -1) {
                         updatedTasks[index] = { ...updatedTasks[index], github: freshDetails.metadata };
                         hasChanges = true;
-                        // Update individual task in storage to be safe, but we'll do a bulk save if possible or just rely on the final state update
                         await updateTask(updatedTasks[index], date, selectedProfile);
                     }
                 }
@@ -451,9 +457,26 @@ function TaskItem({
         if (task.github.state === "merged") stateColor = Color.Purple;
         if (task.github.state === "changes_requested") stateColor = Color.Orange;
 
+        // Add linked PR accessories first (so they appear after issue number)
+        if (task.github.linkedPRs && task.github.linkedPRs.length > 0) {
+            for (const pr of task.github.linkedPRs) {
+                let prColor = Color.Green;
+                if (pr.state === "CLOSED") prColor = Color.Red;
+                if (pr.state === "MERGED") prColor = Color.Purple;
+
+                accessories.unshift({
+                    icon: { source: "pull-request-icon.svg", tintColor: prColor },
+                    tag: { value: `#${pr.number}`, color: prColor },
+                    tooltip: `Linked PR: ${pr.title} (${pr.state.toLowerCase()})`,
+                });
+            }
+        }
+
+        const isIssue = task.github.type === "issue";
         accessories.unshift({
+            icon: { source: isIssue ? "issue-icon.svg" : "pull-request-icon.svg", tintColor: stateColor },
             tag: { value: `#${task.github.number}`, color: stateColor },
-            tooltip: `GitHub ${task.github.type === "pull_request" ? "PR" : "Issue"}: ${task.github.state.replace(/_/g, " ")}`,
+            tooltip: `GitHub ${isIssue ? 'Issue' : 'PR'}: ${task.github.state.replace(/_/g, " ")}`
         });
     }
 
@@ -617,26 +640,12 @@ function TaskDetail({
     async function handleUndoWrapped() {
         if (onUndo) {
             await onUndo();
-            await refreshTask();
         }
     }
 
     async function handleRedoWrapped() {
         if (onRedo) {
             await onRedo();
-            await refreshTask();
-        }
-    }
-
-    async function refreshTask() {
-        // Refetch logic to sync this detail view
-        const freshTasks = await getTasks(date);
-        const freshTask = freshTasks.find((t) => t.id === task.id);
-        if (freshTask) {
-            setTask(freshTask);
-        } else {
-            // Task was likely created then undid creation, so it no longer exists.
-            pop();
         }
     }
 
@@ -648,6 +657,7 @@ function TaskDetail({
                     description: task.description,
                     priority: task.priority,
                     deadline: task.deadline ? new Date(task.deadline) : null,
+                    github: task.github,
                 }}
                 submitTitle="Save Description"
                 mode="description-only"
@@ -715,6 +725,20 @@ function TaskDetail({
                                 />
                             </Detail.Metadata.TagList>
                             <Detail.Metadata.Link title="Link" target={task.github.url} text="Open" />
+                            {task.github.linkedPRs && task.github.linkedPRs.length > 0 && (
+                                <>
+                                    <Detail.Metadata.Separator />
+                                    <Detail.Metadata.Label title="Linked PRs" text={`${task.github.linkedPRs.length} PR(s)`} />
+                                    {task.github.linkedPRs.map((pr) => (
+                                        <Detail.Metadata.Link
+                                            key={pr.number}
+                                            title={`PR #${pr.number}`}
+                                            target={pr.url}
+                                            text={`${pr.title} (${pr.state.toLowerCase()})`}
+                                        />
+                                    ))}
+                                </>
+                            )}
                         </>
                     )}
                     {task.deadline && (

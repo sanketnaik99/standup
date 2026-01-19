@@ -1,3 +1,5 @@
+![GitHub Banner](assets/github-banner.png)
+
 # StandUp
 
 A task tracker built into Raycast that syncs with external data stores.
@@ -27,6 +29,7 @@ To enable GitHub integration (fetching issue details, status tracking):
 3. Select the following scopes:
    - `repo` (Full control of private repositories) - Required if you want to link private issues.
    - `public_repo` (Access public repositories) - Sufficient for public issues only.
+   - `read:project` - Required to fetch linked PRs from issue timeline.
 4. Open Raycast and type `StandUp`.
 5. Press `Cmd+,` to open **Preferences**.
 6. Paste your token into the **GitHub Personal Access Token** field.

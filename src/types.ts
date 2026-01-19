@@ -9,6 +9,13 @@ export interface Task {
   deadline?: number | null;
 }
 
+export interface LinkedPR {
+  number: number;
+  title: string;
+  url: string;
+  state: "OPEN" | "CLOSED" | "MERGED";
+}
+
 export interface GithubMetadata {
   url: string;
   number: number;
@@ -17,6 +24,7 @@ export interface GithubMetadata {
   state: string;
   title: string;
   type: "issue" | "pull_request";
+  linkedPRs?: LinkedPR[];
 }
 
 export type TaskStatus = "todo" | "in-progress" | "paused" | "done";

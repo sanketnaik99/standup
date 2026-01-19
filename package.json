@@ -3,8 +3,9 @@
   "name": "standup",
   "title": "StandUp",
   "description": "A task tracker built into Raycast that syncs with external data stores",
-  "icon": "extension-icon.png",
+  "icon": "standup-logo.png",
   "author": "sanket_naik",
+  "contributors": ["jontkoh"],
   "platforms": [
     "macOS",
     "Windows"
@@ -53,7 +54,7 @@
     }
   ],
   "dependencies": {
-    "@octokit/rest": "^22.0.1",
+    "@octokit/graphql": "^8.0.0",
     "@raycast/api": "^1.104.1",
     "@raycast/utils": "^1.17.0",
     "uuid": "^13.0.0"
