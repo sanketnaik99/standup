@@ -157,7 +157,7 @@ function extractLinkedPRs(timelineNodes: IssueResponse["repository"]["issue"]["t
 
     if (prData && !seenPRNumbers.has(prData.number)) {
       seenPRNumbers.add(prData.number);
-      
+
       // Determine the state - GraphQL returns OPEN/CLOSED but we need to check merged flag
       let state: LinkedPR["state"] = prData.state === "OPEN" ? "OPEN" : "CLOSED";
       if (prData.merged) {
@@ -233,7 +233,7 @@ export async function fetchGithubDetails(url: string): Promise<{ metadata: Githu
       // Extract linked PRs from timeline
       linkedPRs = extractLinkedPRs(issue.timelineItems.nodes);
 
-      console.log('Linked PRs:',linkedPRs, linkedPRs.length);
+      console.log("Linked PRs:", linkedPRs, linkedPRs.length);
     }
 
     return {
