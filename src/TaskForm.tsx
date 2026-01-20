@@ -31,7 +31,12 @@ export default function TaskForm({
   const { pop } = useNavigation();
   const [isFetching, setIsFetching] = useState(false);
   const [github, setGithub] = useState<GithubMetadata | undefined>(initialValues?.github);
-  const { handleSubmit, itemProps, setValue, values: formValues } = useForm<FormValues>({
+  const {
+    handleSubmit,
+    itemProps,
+    setValue,
+    values: formValues,
+  } = useForm<FormValues>({
     initialValues: {
       title: initialValues?.title || "",
       description: initialValues?.description || "",
@@ -48,49 +53,49 @@ export default function TaskForm({
         if (shouldPopAfterSubmit) {
           pop();
         }
-      } catch (error) {
+      } catch {
         // Error handling is expected to be done by the parent or global error handler
       }
     },
   });
-  
+
   // Keep a ref to values to access the latest state in async callbacks
   const valuesRef = useRef(formValues);
   valuesRef.current = formValues;
 
   const handleGithubUrlChange = async (newValue: string) => {
     setValue("githubUrl", newValue);
-    
+
     if (!newValue) {
-        setGithub(undefined);
-        return;
+      setGithub(undefined);
+      return;
     }
 
     if (parseGithubUrl(newValue)) {
-        setIsFetching(true);
-        const toast = await showToast({ style: Toast.Style.Animated, title: "Fetching GitHub details..." });
-        
-        const result = await fetchGithubDetails(newValue);
-        
-        if (result) {
-            // Check value from ref to avoid stale closure
-            if (!valuesRef.current.title) {
-                setValue("title", result.metadata.title);
-            }
-            if (!valuesRef.current.description) {
-             setValue("description", result.body || result.metadata.url); 
-            }
-            
-            setGithub(result.metadata);
-            toast.style = Toast.Style.Success;
-            toast.title = "Fetched GitHub details";
-        } else {
-            toast.style = Toast.Style.Failure;
-            toast.title = "Failed to fetch GitHub details";
+      setIsFetching(true);
+      const toast = await showToast({ style: Toast.Style.Animated, title: "Fetching GitHub details..." });
+
+      const result = await fetchGithubDetails(newValue);
+
+      if (result) {
+        // Check value from ref to avoid stale closure
+        if (!valuesRef.current.title) {
+          setValue("title", result.metadata.title);
         }
-        setIsFetching(false);
+        if (!valuesRef.current.description) {
+          setValue("description", result.body || result.metadata.url);
+        }
+
+        setGithub(result.metadata);
+        toast.style = Toast.Style.Success;
+        toast.title = "Fetched GitHub details";
+      } else {
+        toast.style = Toast.Style.Failure;
+        toast.title = "Failed to fetch GitHub details";
+      }
+      setIsFetching(false);
     }
-  }
+  };
 
   return (
     <Form
@@ -109,11 +114,7 @@ export default function TaskForm({
             placeholder="Paste GitHub Issue or PR URL"
             onChange={handleGithubUrlChange}
           />
-          <Form.TextField
-            {...itemProps.title}
-            title="Title"
-            placeholder="Enter task title"
-          />
+          <Form.TextField {...itemProps.title} title="Title" placeholder="Enter task title" />
         </>
       )}
       <Form.TextArea
