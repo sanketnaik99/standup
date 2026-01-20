@@ -2,8 +2,8 @@ import { runAppleScript } from "@raycast/utils";
 import { Task } from "./types";
 import { getDateString } from "./utils";
 
-export async function syncDailyNote(date: Date, tasks: Task[]): Promise<void> {
-  const noteTitle = `Tasks ${getDateString(date)}`;
+export async function syncDailyNote(date: Date, tasks: Task[], profile: string): Promise<void> {
+  const noteTitle = `${profile} Tasks ${getDateString(date)}`;
   const folderName = "Tasks";
 
   const generateHTML = (tasks: Task[]) => {
@@ -38,8 +38,9 @@ export async function syncDailyNote(date: Date, tasks: Task[]): Promise<void> {
     const renderTask = (t: Task) => {
       const priorityLabel = t.priority === "high" ? "🔴" : t.priority === "medium" ? "🟠" : "🟢";
       return `
-          <div class="task ${t.status}">
-            ${getIcon(t.status)} <strong>${t.title}</strong> ${priorityLabel} <br/>
+            ${getIcon(t.status)} <strong>${t.title}</strong> ${priorityLabel} ${
+              t.deadline ? `📅 ${new Date(t.deadline).toLocaleDateString()}` : ""
+            }<br/>
             <span style="font-size: 0.9em; color: #666;">${t.description.replace(/\n/g, "<br/>")}</span>
           </div>
           <hr/>

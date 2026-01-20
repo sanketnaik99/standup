@@ -1,8 +1,33 @@
-import { Action, ActionPanel, Color, Detail, Icon, List, showToast, Toast, useNavigation } from "@raycast/api";
+import {
+  Action,
+  ActionPanel,
+  Color,
+  Detail,
+  Icon,
+  List,
+  showToast,
+  Toast,
+  useNavigation,
+  LocalStorage,
+  Alert,
+  confirmAlert,
+} from "@raycast/api";
 import { useEffect, useState, useCallback, useRef } from "react";
 import { Task, TaskPriority, TaskStatus } from "./types";
-import { deleteTask, getDateString, getTasks, updateTask, createTask, migrateTasksToToday, saveTasks } from "./utils";
+import {
+  deleteTask,
+  getDateString,
+  getTasks,
+  updateTask,
+  createTask,
+  migrateTasksToToday,
+  saveTasks,
+  getProfiles,
+  deleteProfile,
+  DEFAULT_PROFILE,
+} from "./utils";
 import TaskForm from "./TaskForm";
+import CreateProfileForm from "./CreateProfileForm";
 import { v4 as uuidv4 } from "uuid";
 
 interface TaskListViewProps {
@@ -11,25 +36,50 @@ interface TaskListViewProps {
 
 export default function TaskListView({ date }: TaskListViewProps) {
   const [tasks, setTasks] = useState<Task[]>([]);
+  const [selectedProfile, setSelectedProfile] = useState<string>(DEFAULT_PROFILE);
+  const [profiles, setProfiles] = useState<string[]>([DEFAULT_PROFILE]);
   const [isLoading, setIsLoading] = useState(true);
   const [undoStack, setUndoStack] = useState<Task[][]>([]);
   const [redoStack, setRedoStack] = useState<Task[][]>([]);
+  const [isProfileLoaded, setIsProfileLoaded] = useState(false);
   const tasksRef = useRef<Task[]>([]);
 
   useEffect(() => {
+    async function init() {
+      const storedProfiles = await getProfiles();
+      setProfiles(storedProfiles);
+
+      const lastProfile = await LocalStorage.getItem<string>("last_profile");
+      if (lastProfile && storedProfiles.includes(lastProfile)) {
+        setSelectedProfile(lastProfile);
+      } else {
+        setSelectedProfile(DEFAULT_PROFILE);
+      }
+      setIsProfileLoaded(true);
+    }
+    init();
+  }, []);
+
+  useEffect(() => {
     loadTasks();
-  }, [date]);
+  }, [date, selectedProfile]);
 
   useEffect(() => {
     tasksRef.current = tasks;
   }, [tasks]);
 
+  useEffect(() => {
+    if (isProfileLoaded) {
+      LocalStorage.setItem("last_profile", selectedProfile);
+    }
+  }, [selectedProfile, isProfileLoaded]);
+
   async function loadTasks() {
     setIsLoading(true);
     if (getDateString(date) === getDateString(new Date())) {
-      await migrateTasksToToday();
+      await migrateTasksToToday(selectedProfile);
     }
-    const loadedTasks = await getTasks(date);
+    const loadedTasks = await getTasks(date, selectedProfile);
     setTasks(loadedTasks);
     setIsLoading(false);
 
@@ -38,15 +88,16 @@ export default function TaskListView({ date }: TaskListViewProps) {
   }
 
   async function refreshGithubStatuses(currentTasks: Task[]) {
-    const tasksToRefresh = currentTasks.filter(t => t.github);
+    const tasksToRefresh = currentTasks.filter((t) => t.github);
     if (tasksToRefresh.length === 0) return;
 
     const { fetchGithubDetails } = await import("./github");
-    
+
     let hasChanges = false;
     const updatedTasks = [...currentTasks];
 
-    await Promise.all(tasksToRefresh.map(async (task) => {
+    await Promise.all(
+      tasksToRefresh.map(async (task) => {
         if (!task.github) return;
         const freshDetails = await fetchGithubDetails(task.github.url);
         if (!freshDetails) return;
@@ -116,10 +167,34 @@ export default function TaskListView({ date }: TaskListViewProps) {
             hasChanges = true;
             await updateTask(updatedTasks[index], date); 
         }
-    }));
+
+      }),
+    );
 
     if (hasChanges) {
-        setTasks(updatedTasks);
+      setTasks(updatedTasks);
+    }
+  }
+
+  async function handleDeleteProfile() {
+    if (selectedProfile === DEFAULT_PROFILE) return;
+
+    if (
+      await confirmAlert({
+        title: `Delete Profile "${selectedProfile}"?`,
+        message:
+          "Tasks will remain in the database but will be hidden. You can restore them by creating a profile with the same name.",
+        primaryAction: {
+          title: "Delete",
+          style: Alert.ActionStyle.Destructive,
+        },
+      })
+    ) {
+      await deleteProfile(selectedProfile);
+      const newProfiles = profiles.filter((p) => p !== selectedProfile);
+      setProfiles(newProfiles);
+      setSelectedProfile(DEFAULT_PROFILE); // Navigate back to default
+      await showToast({ style: Toast.Style.Success, title: "Profile deleted" });
     }
   }
 
@@ -127,6 +202,11 @@ export default function TaskListView({ date }: TaskListViewProps) {
     setUndoStack((prev) => [...prev, tasksRef.current]);
     setRedoStack([]); // Clear redo stack on new action
   }, []);
+
+  const handleCreateProfile = (name: string) => {
+    setProfiles((prev) => [...prev, name]);
+    setSelectedProfile(name);
+  };
 
   async function handleUndo() {
     if (undoStack.length === 0) return;
@@ -137,7 +217,7 @@ export default function TaskListView({ date }: TaskListViewProps) {
     setRedoStack((prev) => [...prev, tasksRef.current]);
     setUndoStack(newUndoStack);
     setTasks(previousTasks);
-    await saveTasks(date, previousTasks);
+    await saveTasks(date, previousTasks, selectedProfile);
     await showToast({ style: Toast.Style.Success, title: "Undone" });
   }
 
@@ -150,7 +230,7 @@ export default function TaskListView({ date }: TaskListViewProps) {
     setUndoStack((prev) => [...prev, tasksRef.current]);
     setRedoStack(newRedoStack);
     setTasks(nextTasks);
-    await saveTasks(date, nextTasks);
+    await saveTasks(date, nextTasks, selectedProfile);
     await showToast({ style: Toast.Style.Success, title: "Redone" });
   }
 
@@ -203,6 +283,7 @@ export default function TaskListView({ date }: TaskListViewProps) {
           deadline: values.deadline ? values.deadline.getTime() : null,
         },
         date,
+        selectedProfile,
       );
       await showToast({ style: Toast.Style.Success, title: "Task added" });
       loadTasks();
@@ -213,13 +294,13 @@ export default function TaskListView({ date }: TaskListViewProps) {
 
   async function handleUpdateTaskWrapped(updatedTask: Task) {
     pushToUndoStack();
-    await updateTask(updatedTask, date);
+    await updateTask(updatedTask, date, selectedProfile);
     loadTasks();
   }
 
   async function handleDeleteTaskWrapped(taskId: string) {
     pushToUndoStack();
-    await deleteTask(taskId, date);
+    await deleteTask(taskId, date, selectedProfile);
     loadTasks();
   }
 
@@ -245,6 +326,17 @@ export default function TaskListView({ date }: TaskListViewProps) {
       isLoading={isLoading}
       searchBarPlaceholder="Filter tasks..."
       navigationTitle={`Tasks for ${getDateString(date)}`}
+      searchBarAccessory={
+        <List.Dropdown
+          tooltip="Select Profile"
+          value={selectedProfile}
+          onChange={(newValue) => setSelectedProfile(newValue)}
+        >
+          {profiles.map((profile) => (
+            <List.Dropdown.Item key={profile} title={profile} value={profile} />
+          ))}
+        </List.Dropdown>
+      }
       actions={
         <ActionPanel>
           <Action.Push
@@ -264,6 +356,12 @@ export default function TaskListView({ date }: TaskListViewProps) {
               onAction={handleRedo}
             />
           )}
+          <Action.Push
+            title="Create New Profile"
+            icon={Icon.Person}
+            shortcut={{ modifiers: ["cmd", "shift"], key: "n" }}
+            target={<CreateProfileForm onCreate={handleCreateProfile} />}
+          />
         </ActionPanel>
       }
     >
@@ -273,11 +371,15 @@ export default function TaskListView({ date }: TaskListViewProps) {
             key={task.id}
             task={task}
             date={date}
+            selectedProfile={selectedProfile}
             onUpdateTask={handleUpdateTaskWrapped}
             onCreateTask={handleCreateTaskWrapped}
             onDeleteTask={handleDeleteTaskWrapped}
             onUndo={undoStack.length > 0 ? handleUndo : undefined}
             onRedo={redoStack.length > 0 ? handleRedo : undefined}
+            onCreateProfile={handleCreateProfile}
+            onDeleteProfile={handleDeleteProfile}
+            isDefaultProfile={selectedProfile === DEFAULT_PROFILE}
           />
         ))}
       </List.Section>
@@ -287,11 +389,15 @@ export default function TaskListView({ date }: TaskListViewProps) {
             key={task.id}
             task={task}
             date={date}
+            selectedProfile={selectedProfile}
             onUpdateTask={handleUpdateTaskWrapped}
             onCreateTask={handleCreateTaskWrapped}
             onDeleteTask={handleDeleteTaskWrapped}
             onUndo={undoStack.length > 0 ? handleUndo : undefined}
             onRedo={redoStack.length > 0 ? handleRedo : undefined}
+            onCreateProfile={handleCreateProfile}
+            onDeleteProfile={handleDeleteProfile}
+            isDefaultProfile={selectedProfile === DEFAULT_PROFILE}
           />
         ))}
       </List.Section>
@@ -306,6 +412,10 @@ export default function TaskListView({ date }: TaskListViewProps) {
             onDeleteTask={handleDeleteTaskWrapped}
             onUndo={undoStack.length > 0 ? handleUndo : undefined}
             onRedo={redoStack.length > 0 ? handleRedo : undefined}
+            selectedProfile={selectedProfile}
+            onCreateProfile={handleCreateProfile}
+            onDeleteProfile={handleDeleteProfile}
+            isDefaultProfile={selectedProfile === DEFAULT_PROFILE}
           />
         ))}
       </List.Section>
@@ -320,6 +430,10 @@ export default function TaskListView({ date }: TaskListViewProps) {
             onDeleteTask={handleDeleteTaskWrapped}
             onUndo={undoStack.length > 0 ? handleUndo : undefined}
             onRedo={redoStack.length > 0 ? handleRedo : undefined}
+            selectedProfile={selectedProfile}
+            onCreateProfile={handleCreateProfile}
+            onDeleteProfile={handleDeleteProfile}
+            isDefaultProfile={selectedProfile === DEFAULT_PROFILE}
           />
         ))}
       </List.Section>
@@ -329,11 +443,15 @@ export default function TaskListView({ date }: TaskListViewProps) {
             key={task.id}
             task={task}
             date={date}
+            selectedProfile={selectedProfile}
             onUpdateTask={handleUpdateTaskWrapped}
             onCreateTask={handleCreateTaskWrapped}
             onDeleteTask={handleDeleteTaskWrapped}
             onUndo={undoStack.length > 0 ? handleUndo : undefined}
             onRedo={redoStack.length > 0 ? handleRedo : undefined}
+            onCreateProfile={handleCreateProfile}
+            onDeleteProfile={handleDeleteProfile}
+            isDefaultProfile={selectedProfile === DEFAULT_PROFILE}
           />
         ))}
       </List.Section>
@@ -343,11 +461,15 @@ export default function TaskListView({ date }: TaskListViewProps) {
             key={task.id}
             task={task}
             date={date}
+            selectedProfile={selectedProfile}
             onUpdateTask={handleUpdateTaskWrapped}
             onCreateTask={handleCreateTaskWrapped}
             onDeleteTask={handleDeleteTaskWrapped}
             onUndo={undoStack.length > 0 ? handleUndo : undefined}
             onRedo={redoStack.length > 0 ? handleRedo : undefined}
+            onCreateProfile={handleCreateProfile}
+            onDeleteProfile={handleDeleteProfile}
+            isDefaultProfile={selectedProfile === DEFAULT_PROFILE}
           />
         ))}
       </List.Section>
@@ -373,6 +495,12 @@ export default function TaskListView({ date }: TaskListViewProps) {
                 onAction={handleRedo}
               />
             )}
+            <Action.Push
+              title="Create New Profile"
+              icon={Icon.Person}
+              shortcut={{ modifiers: ["cmd", "shift"], key: "n" }}
+              target={<CreateProfileForm onCreate={handleCreateProfile} />}
+            />
           </ActionPanel>
         }
       />
@@ -383,14 +511,19 @@ export default function TaskListView({ date }: TaskListViewProps) {
 function TaskItem({
   task,
   date,
+  selectedProfile,
   onUpdateTask,
   onCreateTask,
   onDeleteTask,
   onUndo,
   onRedo,
+  onCreateProfile,
+  onDeleteProfile,
+  isDefaultProfile,
 }: {
   task: Task;
   date: Date;
+  selectedProfile: string;
   onUpdateTask: (task: Task) => Promise<void>;
   onCreateTask: (values: {
     title: string;
@@ -401,6 +534,9 @@ function TaskItem({
   onDeleteTask: (taskId: string) => Promise<void>;
   onUndo?: () => Promise<void>;
   onRedo?: () => Promise<void>;
+  onCreateProfile: (name: string) => void;
+  onDeleteProfile: () => Promise<void>;
+  isDefaultProfile: boolean;
 }) {
   async function handleToggleStatus() {
     let newStatus: TaskStatus = "done";
@@ -470,9 +606,9 @@ function TaskItem({
 
     const isIssue = task.github.type === "issue";
     accessories.unshift({
-        icon: { source: isIssue ? "issue-icon.svg" : "pull-request-icon.svg", tintColor: stateColor },
-        tag: { value: `#${task.github.number}`, color: stateColor },
-        tooltip: `GitHub ${isIssue ? 'Issue' : 'PR'}: ${task.github.state.replace(/_/g, " ")}`
+      icon: { source: isIssue ? "issue-icon.svg" : "pull-request-icon.svg", tintColor: stateColor },
+      tag: { value: `#${task.github.number}`, color: stateColor },
+      tooltip: `GitHub ${isIssue ? "Issue" : "PR"}: ${task.github.state.replace(/_/g, " ")}`,
     });
   }
 
@@ -483,12 +619,28 @@ function TaskItem({
       accessories={[...(task.deadline ? [{ date: new Date(task.deadline), tooltip: "Deadline" }] : []), ...accessories]}
       actions={
         <ActionPanel>
-          <Action title={task.status === "done" ? "Mark as Undone" : "Mark as Done"} icon={Icon.CheckCircle} onAction={handleToggleStatus} />
+          <Action
+            title={task.status === "done" ? "Mark as Undone" : "Mark as Done"}
+            icon={Icon.CheckCircle}
+            onAction={handleToggleStatus}
+          />
           <Action.Push
             title="Show Details"
             icon={Icon.Sidebar}
             shortcut={{ modifiers: ["cmd"], key: "return" }}
-            target={<TaskDetail task={task} date={date} onUpdateTask={onUpdateTask} onUndo={onUndo} onRedo={onRedo} />}
+            target={
+              <TaskDetail
+                task={task}
+                date={date}
+                selectedProfile={selectedProfile}
+                onUpdateTask={onUpdateTask}
+                onUndo={onUndo}
+                onRedo={onRedo}
+                onCreateProfile={onCreateProfile}
+                onDeleteProfile={onDeleteProfile}
+                isDefaultProfile={isDefaultProfile}
+              />
+            }
           />
           <Action.Push
             title="Edit Task"
@@ -515,7 +667,13 @@ function TaskItem({
               />
             }
           />
-          {task.github && <Action.OpenInBrowser url={task.github.url} title="Open in GitHub" shortcut={{ modifiers: ["opt"], key: "enter" }} />}
+          {task.github && (
+            <Action.OpenInBrowser
+              url={task.github.url}
+              title="Open in GitHub"
+              shortcut={{ modifiers: ["opt"], key: "enter" }}
+            />
+          )}
           <Action
             title="Pause Task"
             icon={Icon.Pause}
@@ -560,6 +718,21 @@ function TaskItem({
               onAction={onRedo}
             />
           )}
+          <Action.Push
+            title="Create New Profile"
+            icon={Icon.Person}
+            shortcut={{ modifiers: ["cmd", "shift"], key: "n" }}
+            target={<CreateProfileForm onCreate={onCreateProfile} />}
+          />
+          {!isDefaultProfile && (
+            <Action
+              title="Delete Current Profile"
+              icon={Icon.Trash}
+              style={Action.Style.Destructive}
+              shortcut={{ modifiers: ["ctrl", "shift"], key: "x" }}
+              onAction={onDeleteProfile}
+            />
+          )}
         </ActionPanel>
       }
     />
@@ -569,15 +742,23 @@ function TaskItem({
 function TaskDetail({
   task: initialTask,
   date,
+  selectedProfile,
   onUpdateTask,
   onUndo,
   onRedo,
+  onCreateProfile,
+  onDeleteProfile,
+  isDefaultProfile,
 }: {
   task: Task;
   date: Date;
+  selectedProfile: string;
   onUpdateTask: (task: Task) => Promise<void>;
   onUndo?: () => Promise<void>;
   onRedo?: () => Promise<void>;
+  onCreateProfile: (name: string) => void;
+  onDeleteProfile: () => Promise<void>;
+  isDefaultProfile: boolean;
 }) {
   const [task, setTask] = useState<Task>(initialTask);
   const [isEditing, setIsEditing] = useState(false);
@@ -622,7 +803,7 @@ function TaskDetail({
 
   async function refreshTask() {
     // Refetch logic to sync this detail view
-    const freshTasks = await getTasks(date);
+    const freshTasks = await getTasks(date, selectedProfile);
     const freshTask = freshTasks.find((t) => t.id === task.id);
     if (freshTask) {
       setTask(freshTask);
@@ -640,6 +821,7 @@ function TaskDetail({
           description: task.description,
           priority: task.priority,
           deadline: task.deadline ? new Date(task.deadline) : null,
+          github: task.github,
         }}
         submitTitle="Save Description"
         mode="description-only"
@@ -694,33 +876,37 @@ function TaskDetail({
           <Detail.Metadata.Label title="Created" text={new Date(task.createdAt).toLocaleString()} />
           {task.github && (
             <>
-                <Detail.Metadata.Separator />
-                <Detail.Metadata.TagList title="State">
-                  <Detail.Metadata.TagList.Item 
-                    text={task.github.state.replace(/_/g, " ")} 
-                    color={
-                        task.github.state === "merged" ? Color.Purple :
-                        task.github.state === "changes_requested" ? Color.Orange :
-                        task.github.state === "closed" ? Color.Red :
-                        Color.Green
-                    }
-                  />
-                </Detail.Metadata.TagList>
-                <Detail.Metadata.Link title="Issue Link" target={task.github.url} text="Open" />
-                {task.github.linkedPRs && task.github.linkedPRs.length > 0 && (
-                  <>
-                    <Detail.Metadata.Separator />
-                    <Detail.Metadata.Label title="Linked PRs" text={`${task.github.linkedPRs.length} PR(s)`} />
-                    {task.github.linkedPRs.map((pr) => (
-                      <Detail.Metadata.Link
-                        key={pr.number}
-                        title={`PR #${pr.number}`}
-                        target={pr.url}
-                        text={`${pr.title} (${pr.state.toLowerCase()})`}
-                      />
-                    ))}
-                  </>
-                )}
+              <Detail.Metadata.Separator />
+              <Detail.Metadata.Label title="GitHub" text={`#${task.github.number}`} />
+              <Detail.Metadata.TagList title="State">
+                <Detail.Metadata.TagList.Item
+                  text={task.github.state.replace(/_/g, " ")}
+                  color={
+                    task.github.state === "merged"
+                      ? Color.Purple
+                      : task.github.state === "changes_requested"
+                        ? Color.Orange
+                        : task.github.state === "closed"
+                          ? Color.Red
+                          : Color.Green
+                  }
+                />
+              </Detail.Metadata.TagList>
+              <Detail.Metadata.Link title="Link" target={task.github.url} text="Open" />
+              {task.github.linkedPRs && task.github.linkedPRs.length > 0 && (
+                <>
+                  <Detail.Metadata.Separator />
+                  <Detail.Metadata.Label title="Linked PRs" text={`${task.github.linkedPRs.length} PR(s)`} />
+                  {task.github.linkedPRs.map((pr) => (
+                    <Detail.Metadata.Link
+                      key={pr.number}
+                      title={`PR #${pr.number}`}
+                      target={pr.url}
+                      text={`${pr.title} (${pr.state.toLowerCase()})`}
+                    />
+                  ))}
+                </>
+              )}
             </>
           )}
           {task.deadline && (
@@ -803,6 +989,22 @@ function TaskDetail({
               icon={Icon.Redo}
               shortcut={{ modifiers: ["cmd", "shift"], key: "z" }}
               onAction={handleRedoWrapped}
+            />
+          )}
+          <Action.Push
+            title="Create New Profile"
+            icon={Icon.Person}
+            shortcut={{ modifiers: ["cmd", "shift"], key: "n" }}
+            target={<CreateProfileForm onCreate={onCreateProfile} />}
+          />
+
+          {!isDefaultProfile && (
+            <Action
+              title="Delete Current Profile"
+              icon={Icon.Trash}
+              style={Action.Style.Destructive}
+              shortcut={{ modifiers: ["ctrl", "shift"], key: "x" }}
+              onAction={onDeleteProfile}
             />
           )}
         </ActionPanel>
