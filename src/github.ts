@@ -1,6 +1,6 @@
 import { getPreferenceValues } from "@raycast/api";
 import { graphql } from "@octokit/graphql";
-import { GithubMetadata, LinkedPR } from "./types";
+import { GithubMetadata, LinkedPR, PRReviewState } from "./types";
 
 const GITHUB_URL_REGEX = /github\.com\/([^/]+)\/([^/]+)\/(issues|pull)\/(\d+)/;
 
@@ -38,6 +38,11 @@ const GET_ISSUE_QUERY = `
                   url
                   state
                   merged
+                  reviews(last: 50) {
+                    nodes {
+                      state
+                    }
+                  }
                 }
               }
             }
@@ -50,6 +55,11 @@ const GET_ISSUE_QUERY = `
                   url
                   state
                   merged
+                  reviews(last: 50) {
+                    nodes {
+                      state
+                    }
+                  }
                 }
               }
             }
@@ -59,6 +69,28 @@ const GET_ISSUE_QUERY = `
     }
   }
 `;
+
+/**
+ * Compute the overall review state from a list of review states.
+ * Returns: approved, changes_requested, or pending_review
+ */
+function getReviewState(reviews: Array<{ state: string }>): PRReviewState {
+  // Look for the most recent actionable review (APPROVED or CHANGES_REQUESTED)
+  // Reviews are in chronological order, so we iterate in reverse to find the latest
+  const reversedReviews = [...reviews].reverse();
+  
+  for (const review of reversedReviews) {
+    if (review.state === "APPROVED") {
+      return "approved";
+    }
+    if (review.state === "CHANGES_REQUESTED") {
+      return "changes_requested";
+    }
+  }
+  
+  // No actionable reviews found
+  return "pending_review";
+}
 
 // GraphQL query for fetching PR details
 const GET_PR_QUERY = `
@@ -101,6 +133,9 @@ interface IssueResponse {
             url: string;
             state: "OPEN" | "CLOSED" | "MERGED";
             merged: boolean;
+            reviews?: {
+              nodes: Array<{ state: string }>;
+            };
           };
           source?: {
             number?: number;
@@ -108,6 +143,9 @@ interface IssueResponse {
             url?: string;
             state?: "OPEN" | "CLOSED" | "MERGED";
             merged?: boolean;
+            reviews?: {
+              nodes: Array<{ state: string }>;
+            };
           };
         }>;
       };
@@ -139,10 +177,20 @@ function extractLinkedPRs(timelineNodes: IssueResponse["repository"]["issue"]["t
   const seenPRNumbers = new Set<number>();
 
   for (const node of timelineNodes) {
-    let prData: { number: number; title: string; url: string; state: string; merged?: boolean } | null = null;
+    let prData: {
+      number: number;
+      title: string;
+      url: string;
+      state: string;
+      merged?: boolean;
+      reviews?: Array<{ state: string }>;
+    } | null = null;
 
     if (node.__typename === "ConnectedEvent" && node.subject) {
-      prData = node.subject;
+      prData = {
+        ...node.subject,
+        reviews: node.subject.reviews?.nodes,
+      };
     } else if (node.__typename === "CrossReferencedEvent" && node.source?.number && node.source.merged !== undefined) {
       // CrossReferencedEvent source could be Issue or PR, we only want PRs
       // PRs have the merged field, issues don't
@@ -152,6 +200,7 @@ function extractLinkedPRs(timelineNodes: IssueResponse["repository"]["issue"]["t
         url: node.source.url || "",
         state: node.source.state || "OPEN",
         merged: node.source.merged,
+        reviews: node.source.reviews?.nodes,
       };
     }
 
@@ -164,11 +213,18 @@ function extractLinkedPRs(timelineNodes: IssueResponse["repository"]["issue"]["t
         state = "MERGED";
       }
 
+      // Compute review state for open PRs
+      let reviewState: PRReviewState | undefined;
+      if (state === "OPEN" && prData.reviews) {
+        reviewState = getReviewState(prData.reviews);
+      }
+
       linkedPRs.push({
         number: prData.number,
         title: prData.title,
         url: prData.url,
         state,
+        reviewState,
       });
     }
   }
@@ -194,6 +250,7 @@ export async function fetchGithubDetails(url: string): Promise<{ metadata: Githu
     let state = "";
     let htmlUrl = url;
     let linkedPRs: LinkedPR[] = [];
+    let reviewState: PRReviewState | undefined;
 
     if (parsed.type === "pull_request") {
       const response = await graphqlWithAuth<PRResponse>(GET_PR_QUERY, {
@@ -207,13 +264,13 @@ export async function fetchGithubDetails(url: string): Promise<{ metadata: Githu
       body = pr.body || "";
       htmlUrl = pr.url;
 
-      // Determine state
+      // Determine state and reviewState
       if (pr.merged) {
         state = "merged";
       } else if (pr.state === "OPEN") {
-        // Check for changes requested
-        const hasChangesRequested = pr.reviews.nodes.some((r) => r.state === "CHANGES_REQUESTED");
-        state = hasChangesRequested ? "changes_requested" : "open";
+        state = "open";
+        // Compute review state for open PRs
+        reviewState = getReviewState(pr.reviews.nodes);
       } else {
         state = "closed";
       }
@@ -232,8 +289,6 @@ export async function fetchGithubDetails(url: string): Promise<{ metadata: Githu
 
       // Extract linked PRs from timeline
       linkedPRs = extractLinkedPRs(issue.timelineItems.nodes);
-
-      console.log("Linked PRs:", linkedPRs, linkedPRs.length);
     }
 
     return {
@@ -246,6 +301,7 @@ export async function fetchGithubDetails(url: string): Promise<{ metadata: Githu
         title: title,
         type: parsed.type,
         linkedPRs: linkedPRs.length > 0 ? linkedPRs : undefined,
+        reviewState,
       },
       body: body,
     };

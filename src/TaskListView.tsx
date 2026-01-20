@@ -102,19 +102,72 @@ export default function TaskListView({ date }: TaskListViewProps) {
         const freshDetails = await fetchGithubDetails(task.github.url);
         if (!freshDetails) return;
 
+        const index = updatedTasks.findIndex(t => t.id === task.id);
+        if (index === -1) return;
+        
+        let updatedTask = { ...updatedTasks[index] };
+        let taskChanged = false;
+
+        // Check if github metadata changed
         const stateChanged = freshDetails.metadata.state !== task.github.state;
-        const currentPRs = task.github?.linkedPRs ?? [];
+        const reviewStateChanged = freshDetails.metadata.reviewState !== task.github.reviewState;
+        const currentPRs = task.github.linkedPRs ?? [];
         const newPRs = freshDetails.metadata.linkedPRs ?? [];
         const linkedPRsChanged = JSON.stringify(currentPRs) !== JSON.stringify(newPRs);
 
-        if (stateChanged || linkedPRsChanged) {
-          const index = updatedTasks.findIndex((t) => t.id === task.id);
-          if (index !== -1) {
-            updatedTasks[index] = { ...updatedTasks[index], github: freshDetails.metadata };
-            hasChanges = true;
-            await updateTask(updatedTasks[index], date, selectedProfile);
-          }
+        if (stateChanged || linkedPRsChanged || reviewStateChanged) {
+            updatedTask = { ...updatedTask, github: freshDetails.metadata };
+            taskChanged = true;
         }
+
+        // ALWAYS check if task status should be updated based on PR review state
+        // This runs regardless of whether github data changed
+        const canAutoUpdate = ["waiting-for-review", "ready-to-merge", "todo", "in-progress"].includes(updatedTask.status);
+        
+        if (canAutoUpdate) {
+            const isPR = freshDetails.metadata.type === "pull_request";
+            const isOpenPR = isPR && freshDetails.metadata.state === "open";
+            
+            // Check linked PRs for issues
+            const hasOpenPendingPR = freshDetails.metadata.linkedPRs?.some(
+                pr => pr.state === "OPEN" && pr.reviewState !== "approved"
+            );
+            const hasOpenApprovedPR = freshDetails.metadata.linkedPRs?.some(
+                pr => pr.state === "OPEN" && pr.reviewState === "approved"
+            );
+            
+            let expectedStatus: TaskStatus | null = null;
+            
+            if (isOpenPR) {
+                // Direct PR case
+                if (freshDetails.metadata.reviewState === "approved") {
+                    expectedStatus = "ready-to-merge";
+                } else {
+                    expectedStatus = "waiting-for-review";
+                }
+            } else if (hasOpenApprovedPR) {
+                // Issue with approved linked PR
+                expectedStatus = "ready-to-merge";
+            } else if (hasOpenPendingPR) {
+                // Issue with linked PR that needs review
+                expectedStatus = "waiting-for-review";
+            }
+            
+            // Update status if it doesn't match what it should be
+            if (expectedStatus && updatedTask.status !== expectedStatus) {
+                updatedTask = { ...updatedTask, status: expectedStatus };
+                taskChanged = true;
+            }
+        }
+
+        if (taskChanged) {
+            // Always update github metadata to latest
+            updatedTask = { ...updatedTask, github: freshDetails.metadata };
+            updatedTasks[index] = updatedTask;
+            hasChanges = true;
+            await updateTask(updatedTasks[index], date); 
+        }
+
       }),
     );
 
@@ -190,13 +243,41 @@ export default function TaskListView({ date }: TaskListViewProps) {
   }) {
     pushToUndoStack();
     try {
+      // Determine initial status based on PR review state
+      let initialStatus: TaskStatus = "todo";
+      
+      if (values.github) {
+        const isPR = values.github.type === "pull_request";
+        const isOpenPR = isPR && values.github.state === "open";
+        const hasOpenPendingPR = values.github.linkedPRs?.some(
+          pr => pr.state === "OPEN" && pr.reviewState !== "approved"
+        );
+        const hasOpenApprovedPR = values.github.linkedPRs?.some(
+          pr => pr.state === "OPEN" && pr.reviewState === "approved"
+        );
+        
+        if (isOpenPR && values.github.reviewState === "approved") {
+          // PR that has been approved - ready to merge
+          initialStatus = "ready-to-merge";
+        } else if (isOpenPR && values.github.reviewState !== "approved") {
+          // PR that hasn't been approved yet
+          initialStatus = "waiting-for-review";
+        } else if (hasOpenApprovedPR) {
+          // Issue with approved linked PR
+          initialStatus = "ready-to-merge";
+        } else if (hasOpenPendingPR) {
+          // Issue with linked PR that needs review
+          initialStatus = "waiting-for-review";
+        }
+      }
+
       await createTask(
         {
           id: uuidv4(),
           title: values.title,
           description: values.description,
           priority: values.priority as TaskPriority,
-          status: "todo",
+          status: initialStatus,
           createdAt: Date.now(),
           github: values.github,
           deadline: values.deadline ? values.deadline.getTime() : null,
@@ -234,6 +315,8 @@ export default function TaskListView({ date }: TaskListViewProps) {
   };
 
   const inProgressTasks = sortTasks(tasks.filter((t) => t.status === "in-progress"));
+  const waitingForReviewTasks = sortTasks(tasks.filter((t) => t.status === "waiting-for-review"));
+  const readyToMergeTasks = sortTasks(tasks.filter((t) => t.status === "ready-to-merge"));
   const pausedTasks = sortTasks(tasks.filter((t) => t.status === "paused"));
   const todoTasks = sortTasks(tasks.filter((t) => t.status === "todo"));
   const doneTasks = sortTasks(tasks.filter((t) => t.status === "done"));
@@ -312,6 +395,42 @@ export default function TaskListView({ date }: TaskListViewProps) {
             onDeleteTask={handleDeleteTaskWrapped}
             onUndo={undoStack.length > 0 ? handleUndo : undefined}
             onRedo={redoStack.length > 0 ? handleRedo : undefined}
+            onCreateProfile={handleCreateProfile}
+            onDeleteProfile={handleDeleteProfile}
+            isDefaultProfile={selectedProfile === DEFAULT_PROFILE}
+          />
+        ))}
+      </List.Section>
+      <List.Section title="Waiting for Review" subtitle={`${waitingForReviewTasks.length}`}>
+        {waitingForReviewTasks.map((task) => (
+          <TaskItem
+            key={task.id}
+            task={task}
+            date={date}
+            onUpdateTask={handleUpdateTaskWrapped}
+            onCreateTask={handleCreateTaskWrapped}
+            onDeleteTask={handleDeleteTaskWrapped}
+            onUndo={undoStack.length > 0 ? handleUndo : undefined}
+            onRedo={redoStack.length > 0 ? handleRedo : undefined}
+            selectedProfile={selectedProfile}
+            onCreateProfile={handleCreateProfile}
+            onDeleteProfile={handleDeleteProfile}
+            isDefaultProfile={selectedProfile === DEFAULT_PROFILE}
+          />
+        ))}
+      </List.Section>
+      <List.Section title="Ready to Merge" subtitle={`${readyToMergeTasks.length}`}>
+        {readyToMergeTasks.map((task) => (
+          <TaskItem
+            key={task.id}
+            task={task}
+            date={date}
+            onUpdateTask={handleUpdateTaskWrapped}
+            onCreateTask={handleCreateTaskWrapped}
+            onDeleteTask={handleDeleteTaskWrapped}
+            onUndo={undoStack.length > 0 ? handleUndo : undefined}
+            onRedo={redoStack.length > 0 ? handleRedo : undefined}
+            selectedProfile={selectedProfile}
             onCreateProfile={handleCreateProfile}
             onDeleteProfile={handleDeleteProfile}
             isDefaultProfile={selectedProfile === DEFAULT_PROFILE}
@@ -425,6 +544,8 @@ function TaskItem({
     else if (task.status === "todo") newStatus = "done";
     else if (task.status === "paused") newStatus = "in-progress";
     else if (task.status === "in-progress") newStatus = "done";
+    else if (task.status === "waiting-for-review") newStatus = "done";
+    else if (task.status === "ready-to-merge") newStatus = "done";
 
     await onUpdateTask({ ...task, status: newStatus });
   }
@@ -446,7 +567,11 @@ function TaskItem({
         ? { source: Icon.Pause, tintColor: Color.Yellow }
         : task.status === "in-progress"
           ? { source: Icon.CircleProgress50, tintColor: Color.Blue }
-          : { source: Icon.Circle };
+          : task.status === "waiting-for-review"
+            ? { source: Icon.Eye, tintColor: Color.Magenta }
+            : task.status === "ready-to-merge"
+              ? { source: Icon.Checkmark, tintColor: Color.Orange }
+              : { source: Icon.Circle };
 
   const accessories: List.Item.Accessory[] = [{ tag: { value: task.priority, color: priorityColor } }];
 
@@ -462,11 +587,19 @@ function TaskItem({
         let prColor = Color.Green;
         if (pr.state === "CLOSED") prColor = Color.Red;
         if (pr.state === "MERGED") prColor = Color.Purple;
+        // Show review state for open PRs
+        if (pr.state === "OPEN" && pr.reviewState === "changes_requested") prColor = Color.Orange;
+        if (pr.state === "OPEN" && pr.reviewState === "approved") prColor = Color.Green;
+        if (pr.state === "OPEN" && pr.reviewState === "pending_review") prColor = Color.Yellow;
+
+        const reviewStateText = pr.state === "OPEN" && pr.reviewState 
+          ? ` - ${pr.reviewState.replace(/_/g, " ")}` 
+          : "";
 
         accessories.unshift({
           icon: { source: "pull-request-icon.svg", tintColor: prColor },
           tag: { value: `#${pr.number}`, color: prColor },
-          tooltip: `Linked PR: ${pr.title} (${pr.state.toLowerCase()})`,
+          tooltip: `Linked PR: ${pr.title} (${pr.state.toLowerCase()}${reviewStateText})`,
         });
       }
     }
@@ -555,6 +688,8 @@ function TaskItem({
           />
           <ActionPanel.Submenu title="Change Status" icon={Icon.Pencil}>
             <Action title="In Progress" onAction={() => handleSetStatus("in-progress")} />
+            <Action title="Waiting for Review" onAction={() => handleSetStatus("waiting-for-review")} />
+            <Action title="Ready to Merge" onAction={() => handleSetStatus("ready-to-merge")} />
             <Action title="To-Do" onAction={() => handleSetStatus("todo")} />
             <Action title="Paused" onAction={() => handleSetStatus("paused")} />
             <Action title="Done" onAction={() => handleSetStatus("done")} />
@@ -646,6 +781,8 @@ function TaskDetail({
     else if (task.status === "todo") newStatus = "done";
     else if (task.status === "paused") newStatus = "in-progress";
     else if (task.status === "in-progress") newStatus = "done";
+    else if (task.status === "waiting-for-review") newStatus = "done";
+    else if (task.status === "ready-to-merge") newStatus = "done";
 
     await handleSetStatus(newStatus);
   }
@@ -722,7 +859,11 @@ function TaskDetail({
                     ? Color.Yellow
                     : task.status === "in-progress"
                       ? Color.Blue
-                      : Color.SecondaryText
+                      : task.status === "waiting-for-review"
+                        ? Color.Magenta
+                        : task.status === "ready-to-merge"
+                          ? Color.Orange
+                          : Color.SecondaryText
               }
             />
           </Detail.Metadata.TagList>
@@ -828,6 +969,8 @@ function TaskDetail({
           />
           <ActionPanel.Submenu title="Change Status" icon={Icon.Pencil}>
             <Action title="In Progress" onAction={() => handleSetStatus("in-progress")} />
+            <Action title="Waiting for Review" onAction={() => handleSetStatus("waiting-for-review")} />
+            <Action title="Ready to Merge" onAction={() => handleSetStatus("ready-to-merge")} />
             <Action title="To-Do" onAction={() => handleSetStatus("todo")} />
             <Action title="Paused" onAction={() => handleSetStatus("paused")} />
             <Action title="Done" onAction={() => handleSetStatus("done")} />
