@@ -28,6 +28,7 @@ import {
 } from "./utils";
 import TaskForm from "./TaskForm";
 import CreateProfileForm from "./CreateProfileForm";
+import BuildWithCursorForm from "./BuildWithCursorForm";
 import { v4 as uuidv4 } from "uuid";
 
 interface TaskListViewProps {
@@ -674,6 +675,12 @@ function TaskItem({
               shortcut={{ modifiers: ["opt"], key: "enter" }}
             />
           )}
+          <Action.Push
+            title="Build with Cursor"
+            icon={Icon.Code}
+            shortcut={{ modifiers: ["cmd", "shift"], key: "c" }}
+            target={<BuildWithCursorForm task={task} />}
+          />
           <Action
             title="Pause Task"
             icon={Icon.Pause}
@@ -966,6 +973,12 @@ function TaskDetail({
             icon={Icon.Play}
             shortcut={{ modifiers: ["cmd", "shift"], key: "s" }}
             onAction={() => handleSetStatus("in-progress")}
+          />
+          <Action.Push
+            title="Build with Cursor"
+            icon={Icon.Code}
+            shortcut={{ modifiers: ["cmd", "shift"], key: "c" }}
+            target={<BuildWithCursorForm task={task} />}
           />
           <ActionPanel.Submenu title="Change Status" icon={Icon.Pencil}>
             <Action title="In Progress" onAction={() => handleSetStatus("in-progress")} />
