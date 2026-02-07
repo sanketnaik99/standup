@@ -78,7 +78,7 @@ function getReviewState(reviews: Array<{ state: string }>): PRReviewState {
   // Look for the most recent actionable review (APPROVED or CHANGES_REQUESTED)
   // Reviews are in chronological order, so we iterate in reverse to find the latest
   const reversedReviews = [...reviews].reverse();
-  
+
   for (const review of reversedReviews) {
     if (review.state === "APPROVED") {
       return "approved";
@@ -87,7 +87,7 @@ function getReviewState(reviews: Array<{ state: string }>): PRReviewState {
       return "changes_requested";
     }
   }
-  
+
   // No actionable reviews found
   return "pending_review";
 }

@@ -11,6 +11,7 @@ interface FormValues {
   github?: GithubMetadata;
   githubUrl?: string;
   deadline?: Date | null;
+  expectedDuration?: string;
 }
 
 interface TaskFormProps {
@@ -43,6 +44,7 @@ export default function TaskForm({
       priority: initialValues?.priority || "medium",
       githubUrl: initialValues?.github?.url || "",
       deadline: initialValues?.deadline,
+      expectedDuration: initialValues?.expectedDuration,
     },
     validation: {
       title: mode === "full" ? FormValidation.Required : undefined,
@@ -131,6 +133,7 @@ export default function TaskForm({
             <Form.Dropdown.Item value="high" title="High" />
           </Form.Dropdown>
           <Form.DatePicker {...itemProps.deadline} title="Deadline" />
+          <Form.TextField {...itemProps.expectedDuration} title="Expected Duration (min)" placeholder="e.g. 30" />
         </>
       )}
     </Form>

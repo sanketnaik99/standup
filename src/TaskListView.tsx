@@ -20,45 +20,70 @@ import {
   getTasks,
   updateTask,
   createTask,
-  migrateTasksToToday,
+  migrateAllTasksToToday,
   saveTasks,
   getProfiles,
   deleteProfile,
   DEFAULT_PROFILE,
+  formatDuration,
+  sortTasks,
 } from "./utils";
 import TaskForm from "./TaskForm";
 import CreateProfileForm from "./CreateProfileForm";
 import { v4 as uuidv4 } from "uuid";
+import { getUserStats, getXpRequiredForNextLevel, processTaskCompletion } from "./gamification";
+import { UserStats } from "./types";
 
 interface TaskListViewProps {
   date: Date;
+  initialProfile?: string;
 }
 
-export default function TaskListView({ date }: TaskListViewProps) {
+export default function TaskListView({ date, initialProfile }: TaskListViewProps) {
   const [tasks, setTasks] = useState<Task[]>([]);
-  const [selectedProfile, setSelectedProfile] = useState<string>(DEFAULT_PROFILE);
-  const [profiles, setProfiles] = useState<string[]>([DEFAULT_PROFILE]);
+  const [selectedProfile, setSelectedProfile] = useState<string>(initialProfile || DEFAULT_PROFILE);
+  const [profiles, setProfiles] = useState<string[]>(() => {
+    if (initialProfile && initialProfile !== DEFAULT_PROFILE) {
+      return [DEFAULT_PROFILE, initialProfile];
+    }
+    return [DEFAULT_PROFILE];
+  });
+  const [isShowingDetail, setIsShowingDetail] = useState(false);
   const [isLoading, setIsLoading] = useState(true);
   const [undoStack, setUndoStack] = useState<Task[][]>([]);
   const [redoStack, setRedoStack] = useState<Task[][]>([]);
   const [isProfileLoaded, setIsProfileLoaded] = useState(false);
+  const [userStats, setUserStats] = useState<UserStats | null>(null);
   const tasksRef = useRef<Task[]>([]);
+
+  useEffect(() => {
+    refreshUserStats();
+  }, []);
+
+  const refreshUserStats = async () => {
+    const stats = await getUserStats();
+    setUserStats(stats);
+  };
 
   useEffect(() => {
     async function init() {
       const storedProfiles = await getProfiles();
       setProfiles(storedProfiles);
 
-      const lastProfile = await LocalStorage.getItem<string>("last_profile");
-      if (lastProfile && storedProfiles.includes(lastProfile)) {
-        setSelectedProfile(lastProfile);
+      if (initialProfile && storedProfiles.includes(initialProfile)) {
+        setSelectedProfile(initialProfile);
       } else {
-        setSelectedProfile(DEFAULT_PROFILE);
+        const lastProfile = await LocalStorage.getItem<string>("last_profile");
+        if (lastProfile && storedProfiles.includes(lastProfile)) {
+          setSelectedProfile(lastProfile);
+        } else {
+          setSelectedProfile(DEFAULT_PROFILE);
+        }
       }
       setIsProfileLoaded(true);
     }
     init();
-  }, []);
+  }, [initialProfile]);
 
   useEffect(() => {
     loadTasks();
@@ -77,7 +102,7 @@ export default function TaskListView({ date }: TaskListViewProps) {
   async function loadTasks() {
     setIsLoading(true);
     if (getDateString(date) === getDateString(new Date())) {
-      await migrateTasksToToday(selectedProfile);
+      await migrateAllTasksToToday();
     }
     const loadedTasks = await getTasks(date, selectedProfile);
     setTasks(loadedTasks);
@@ -102,9 +127,9 @@ export default function TaskListView({ date }: TaskListViewProps) {
         const freshDetails = await fetchGithubDetails(task.github.url);
         if (!freshDetails) return;
 
-        const index = updatedTasks.findIndex(t => t.id === task.id);
+        const index = updatedTasks.findIndex((t) => t.id === task.id);
         if (index === -1) return;
-        
+
         let updatedTask = { ...updatedTasks[index] };
         let taskChanged = false;
 
@@ -116,58 +141,59 @@ export default function TaskListView({ date }: TaskListViewProps) {
         const linkedPRsChanged = JSON.stringify(currentPRs) !== JSON.stringify(newPRs);
 
         if (stateChanged || linkedPRsChanged || reviewStateChanged) {
-            updatedTask = { ...updatedTask, github: freshDetails.metadata };
-            taskChanged = true;
+          updatedTask = { ...updatedTask, github: freshDetails.metadata };
+          taskChanged = true;
         }
 
         // ALWAYS check if task status should be updated based on PR review state
         // This runs regardless of whether github data changed
-        const canAutoUpdate = ["waiting-for-review", "ready-to-merge", "todo", "in-progress"].includes(updatedTask.status);
-        
+        const canAutoUpdate = ["waiting-for-review", "ready-to-merge", "todo", "in-progress"].includes(
+          updatedTask.status,
+        );
+
         if (canAutoUpdate) {
-            const isPR = freshDetails.metadata.type === "pull_request";
-            const isOpenPR = isPR && freshDetails.metadata.state === "open";
-            
-            // Check linked PRs for issues
-            const hasOpenPendingPR = freshDetails.metadata.linkedPRs?.some(
-                pr => pr.state === "OPEN" && pr.reviewState !== "approved"
-            );
-            const hasOpenApprovedPR = freshDetails.metadata.linkedPRs?.some(
-                pr => pr.state === "OPEN" && pr.reviewState === "approved"
-            );
-            
-            let expectedStatus: TaskStatus | null = null;
-            
-            if (isOpenPR) {
-                // Direct PR case
-                if (freshDetails.metadata.reviewState === "approved") {
-                    expectedStatus = "ready-to-merge";
-                } else {
-                    expectedStatus = "waiting-for-review";
-                }
-            } else if (hasOpenApprovedPR) {
-                // Issue with approved linked PR
-                expectedStatus = "ready-to-merge";
-            } else if (hasOpenPendingPR) {
-                // Issue with linked PR that needs review
-                expectedStatus = "waiting-for-review";
+          const isPR = freshDetails.metadata.type === "pull_request";
+          const isOpenPR = isPR && freshDetails.metadata.state === "open";
+
+          // Check linked PRs for issues
+          const hasOpenPendingPR = freshDetails.metadata.linkedPRs?.some(
+            (pr) => pr.state === "OPEN" && pr.reviewState !== "approved",
+          );
+          const hasOpenApprovedPR = freshDetails.metadata.linkedPRs?.some(
+            (pr) => pr.state === "OPEN" && pr.reviewState === "approved",
+          );
+
+          let expectedStatus: TaskStatus | null = null;
+
+          if (isOpenPR) {
+            // Direct PR case
+            if (freshDetails.metadata.reviewState === "approved") {
+              expectedStatus = "ready-to-merge";
+            } else {
+              expectedStatus = "waiting-for-review";
             }
-            
-            // Update status if it doesn't match what it should be
-            if (expectedStatus && updatedTask.status !== expectedStatus) {
-                updatedTask = { ...updatedTask, status: expectedStatus };
-                taskChanged = true;
-            }
+          } else if (hasOpenApprovedPR) {
+            // Issue with approved linked PR
+            expectedStatus = "ready-to-merge";
+          } else if (hasOpenPendingPR) {
+            // Issue with linked PR that needs review
+            expectedStatus = "waiting-for-review";
+          }
+
+          // Update status if it doesn't match what it should be
+          if (expectedStatus && updatedTask.status !== expectedStatus) {
+            updatedTask = { ...updatedTask, status: expectedStatus };
+            taskChanged = true;
+          }
         }
 
         if (taskChanged) {
-            // Always update github metadata to latest
-            updatedTask = { ...updatedTask, github: freshDetails.metadata };
-            updatedTasks[index] = updatedTask;
-            hasChanges = true;
-            await updateTask(updatedTasks[index], date); 
+          // Always update github metadata to latest
+          updatedTask = { ...updatedTask, github: freshDetails.metadata };
+          updatedTasks[index] = updatedTask;
+          hasChanges = true;
+          await updateTask(updatedTasks[index], date);
         }
-
       }),
     );
 
@@ -240,22 +266,23 @@ export default function TaskListView({ date }: TaskListViewProps) {
     priority: string;
     github?: import("./types").GithubMetadata;
     deadline?: Date | null;
+    expectedDuration?: string;
   }) {
     pushToUndoStack();
     try {
       // Determine initial status based on PR review state
       let initialStatus: TaskStatus = "todo";
-      
+
       if (values.github) {
         const isPR = values.github.type === "pull_request";
         const isOpenPR = isPR && values.github.state === "open";
         const hasOpenPendingPR = values.github.linkedPRs?.some(
-          pr => pr.state === "OPEN" && pr.reviewState !== "approved"
+          (pr) => pr.state === "OPEN" && pr.reviewState !== "approved",
         );
         const hasOpenApprovedPR = values.github.linkedPRs?.some(
-          pr => pr.state === "OPEN" && pr.reviewState === "approved"
+          (pr) => pr.state === "OPEN" && pr.reviewState === "approved",
         );
-        
+
         if (isOpenPR && values.github.reviewState === "approved") {
           // PR that has been approved - ready to merge
           initialStatus = "ready-to-merge";
@@ -281,6 +308,7 @@ export default function TaskListView({ date }: TaskListViewProps) {
           createdAt: Date.now(),
           github: values.github,
           deadline: values.deadline ? values.deadline.getTime() : null,
+          expectedDuration: values.expectedDuration ? parseInt(values.expectedDuration) : undefined,
         },
         date,
         selectedProfile,
@@ -304,16 +332,6 @@ export default function TaskListView({ date }: TaskListViewProps) {
     loadTasks();
   }
 
-  const priorityOrder = { high: 3, medium: 2, low: 1 };
-  const sortTasks = (taskList: Task[]) => {
-    return [...taskList].sort((a, b) => {
-      if (a.deadline && !b.deadline) return -1;
-      if (!a.deadline && b.deadline) return 1;
-      if (a.deadline && b.deadline) return a.deadline - b.deadline;
-      return priorityOrder[b.priority] - priorityOrder[a.priority];
-    });
-  };
-
   const inProgressTasks = sortTasks(tasks.filter((t) => t.status === "in-progress"));
   const waitingForReviewTasks = sortTasks(tasks.filter((t) => t.status === "waiting-for-review"));
   const readyToMergeTasks = sortTasks(tasks.filter((t) => t.status === "ready-to-merge"));
@@ -321,11 +339,20 @@ export default function TaskListView({ date }: TaskListViewProps) {
   const todoTasks = sortTasks(tasks.filter((t) => t.status === "todo"));
   const doneTasks = sortTasks(tasks.filter((t) => t.status === "done"));
 
+  const toggleDetail = () => {
+    setIsShowingDetail((prev) => !prev);
+  };
+
+  const navTitle = userStats
+    ? `Lvl ${userStats.level} • ${userStats.xp}/${getXpRequiredForNextLevel(userStats.level)} XP 🔥 ${userStats.currentStreak}`
+    : `Tasks for ${getDateString(date)}`;
+
   return (
     <List
       isLoading={isLoading}
       searchBarPlaceholder="Filter tasks..."
-      navigationTitle={`Tasks for ${getDateString(date)}`}
+      navigationTitle={navTitle}
+      isShowingDetail={isShowingDetail}
       searchBarAccessory={
         <List.Dropdown
           tooltip="Select Profile"
@@ -380,6 +407,9 @@ export default function TaskListView({ date }: TaskListViewProps) {
             onCreateProfile={handleCreateProfile}
             onDeleteProfile={handleDeleteProfile}
             isDefaultProfile={selectedProfile === DEFAULT_PROFILE}
+            isShowingDetail={isShowingDetail}
+            onToggleDetail={toggleDetail}
+            onStatsChange={refreshUserStats}
           />
         ))}
       </List.Section>
@@ -398,6 +428,9 @@ export default function TaskListView({ date }: TaskListViewProps) {
             onCreateProfile={handleCreateProfile}
             onDeleteProfile={handleDeleteProfile}
             isDefaultProfile={selectedProfile === DEFAULT_PROFILE}
+            isShowingDetail={isShowingDetail}
+            onToggleDetail={toggleDetail}
+            onStatsChange={refreshUserStats}
           />
         ))}
       </List.Section>
@@ -416,6 +449,9 @@ export default function TaskListView({ date }: TaskListViewProps) {
             onCreateProfile={handleCreateProfile}
             onDeleteProfile={handleDeleteProfile}
             isDefaultProfile={selectedProfile === DEFAULT_PROFILE}
+            isShowingDetail={isShowingDetail}
+            onToggleDetail={toggleDetail}
+            onStatsChange={refreshUserStats}
           />
         ))}
       </List.Section>
@@ -434,6 +470,9 @@ export default function TaskListView({ date }: TaskListViewProps) {
             onCreateProfile={handleCreateProfile}
             onDeleteProfile={handleDeleteProfile}
             isDefaultProfile={selectedProfile === DEFAULT_PROFILE}
+            isShowingDetail={isShowingDetail}
+            onToggleDetail={toggleDetail}
+            onStatsChange={refreshUserStats}
           />
         ))}
       </List.Section>
@@ -452,6 +491,9 @@ export default function TaskListView({ date }: TaskListViewProps) {
             onCreateProfile={handleCreateProfile}
             onDeleteProfile={handleDeleteProfile}
             isDefaultProfile={selectedProfile === DEFAULT_PROFILE}
+            isShowingDetail={isShowingDetail}
+            onToggleDetail={toggleDetail}
+            onStatsChange={refreshUserStats}
           />
         ))}
       </List.Section>
@@ -470,6 +512,9 @@ export default function TaskListView({ date }: TaskListViewProps) {
             onCreateProfile={handleCreateProfile}
             onDeleteProfile={handleDeleteProfile}
             isDefaultProfile={selectedProfile === DEFAULT_PROFILE}
+            isShowingDetail={isShowingDetail}
+            onToggleDetail={toggleDetail}
+            onStatsChange={refreshUserStats}
           />
         ))}
       </List.Section>
@@ -520,6 +565,9 @@ function TaskItem({
   onCreateProfile,
   onDeleteProfile,
   isDefaultProfile,
+  isShowingDetail,
+  onToggleDetail,
+  onStatsChange,
 }: {
   task: Task;
   date: Date;
@@ -530,6 +578,7 @@ function TaskItem({
     description: string;
     priority: string;
     deadline?: Date | null;
+    expectedDuration?: string;
   }) => Promise<void>;
   onDeleteTask: (taskId: string) => Promise<void>;
   onUndo?: () => Promise<void>;
@@ -537,6 +586,9 @@ function TaskItem({
   onCreateProfile: (name: string) => void;
   onDeleteProfile: () => Promise<void>;
   isDefaultProfile: boolean;
+  isShowingDetail: boolean;
+  onToggleDetail: () => void;
+  onStatsChange: () => void;
 }) {
   async function handleToggleStatus() {
     let newStatus: TaskStatus = "done";
@@ -547,10 +599,27 @@ function TaskItem({
     else if (task.status === "waiting-for-review") newStatus = "done";
     else if (task.status === "ready-to-merge") newStatus = "done";
 
+    if (newStatus === "done" && task.status !== "done") {
+      const { xpAwarded } = await processTaskCompletion(task, "task");
+      if (xpAwarded) {
+        await onUpdateTask({ ...task, status: newStatus, xpAwarded: true });
+        onStatsChange();
+        return;
+      }
+    }
+
     await onUpdateTask({ ...task, status: newStatus });
   }
 
   async function handleSetStatus(status: TaskStatus) {
+    if (status === "done" && task.status !== "done") {
+      const { xpAwarded } = await processTaskCompletion(task, "task");
+      if (xpAwarded) {
+        await onUpdateTask({ ...task, status, xpAwarded: true });
+        onStatsChange();
+        return;
+      }
+    }
     await onUpdateTask({ ...task, status });
   }
 
@@ -574,6 +643,13 @@ function TaskItem({
               : { source: Icon.Circle };
 
   const accessories: List.Item.Accessory[] = [{ tag: { value: task.priority, color: priorityColor } }];
+  if (task.expectedDuration) {
+    accessories.unshift({
+      icon: Icon.Stopwatch,
+      tag: { value: formatDuration(task.expectedDuration), color: Color.SecondaryText },
+      tooltip: "Expected Duration",
+    });
+  }
 
   if (task.github) {
     let stateColor = Color.Green;
@@ -592,9 +668,7 @@ function TaskItem({
         if (pr.state === "OPEN" && pr.reviewState === "approved") prColor = Color.Green;
         if (pr.state === "OPEN" && pr.reviewState === "pending_review") prColor = Color.Yellow;
 
-        const reviewStateText = pr.state === "OPEN" && pr.reviewState 
-          ? ` - ${pr.reviewState.replace(/_/g, " ")}` 
-          : "";
+        const reviewStateText = pr.state === "OPEN" && pr.reviewState ? ` - ${pr.reviewState.replace(/_/g, " ")}` : "";
 
         accessories.unshift({
           icon: { source: "pull-request-icon.svg", tintColor: prColor },
@@ -616,7 +690,15 @@ function TaskItem({
     <List.Item
       title={task.title}
       icon={icon}
-      accessories={[...(task.deadline ? [{ date: new Date(task.deadline), tooltip: "Deadline" }] : []), ...accessories]}
+      accessories={
+        !isShowingDetail
+          ? [
+              ...(task.deadline ? [{ icon: Icon.Calendar, date: new Date(task.deadline), tooltip: "Deadline" }] : []),
+              ...accessories,
+            ]
+          : undefined
+      }
+      detail={<List.Item.Detail markdown={`# ${task.title}\n\n${task.description}`} />}
       actions={
         <ActionPanel>
           <Action
@@ -624,10 +706,16 @@ function TaskItem({
             icon={Icon.CheckCircle}
             onAction={handleToggleStatus}
           />
-          <Action.Push
-            title="Show Details"
+          <Action
+            title={isShowingDetail ? "Close Side View" : "Show Side View"}
             icon={Icon.Sidebar}
             shortcut={{ modifiers: ["cmd"], key: "return" }}
+            onAction={onToggleDetail}
+          />
+          <Action.Push
+            title="Show Full Details"
+            icon={Icon.Eye}
+            shortcut={{ modifiers: ["cmd", "shift"], key: "return" }}
             target={
               <TaskDetail
                 task={task}
@@ -653,6 +741,7 @@ function TaskItem({
                   description: task.description,
                   priority: task.priority,
                   deadline: task.deadline ? new Date(task.deadline) : null,
+                  expectedDuration: task.expectedDuration?.toString(),
                 }}
                 submitTitle="Update Task"
                 onSubmit={async (values) => {
@@ -661,6 +750,7 @@ function TaskItem({
                     ...values,
                     priority: values.priority as TaskPriority,
                     deadline: values.deadline ? values.deadline.getTime() : null,
+                    expectedDuration: values.expectedDuration ? parseInt(values.expectedDuration) : undefined,
                   });
                   await showToast({ style: Toast.Style.Success, title: "Task updated" });
                 }}
@@ -739,7 +829,7 @@ function TaskItem({
   );
 }
 
-function TaskDetail({
+export function TaskDetail({
   task: initialTask,
   date,
   selectedProfile,
@@ -753,11 +843,11 @@ function TaskDetail({
   task: Task;
   date: Date;
   selectedProfile: string;
-  onUpdateTask: (task: Task) => Promise<void>;
+  onUpdateTask?: (task: Task) => Promise<void>;
   onUndo?: () => Promise<void>;
   onRedo?: () => Promise<void>;
-  onCreateProfile: (name: string) => void;
-  onDeleteProfile: () => Promise<void>;
+  onCreateProfile?: (name: string) => void;
+  onDeleteProfile?: () => Promise<void>;
   isDefaultProfile: boolean;
 }) {
   const [task, setTask] = useState<Task>(initialTask);
@@ -769,13 +859,18 @@ function TaskDetail({
     setTask(initialTask);
   }, [initialTask]);
 
+  // If we're in read-only mode (no onUpdateTask), we can't update or toggle status
+  const isReadOnly = !onUpdateTask;
+
   async function handleSetStatus(status: TaskStatus) {
+    if (isReadOnly || !onUpdateTask) return;
     const updatedTask = { ...task, status };
     setTask(updatedTask);
     await onUpdateTask(updatedTask);
   }
 
   async function handleToggleStatus() {
+    if (isReadOnly || !onUpdateTask) return;
     let newStatus: TaskStatus = "done";
     if (task.status === "done") newStatus = "todo";
     else if (task.status === "todo") newStatus = "done";
@@ -813,7 +908,7 @@ function TaskDetail({
     }
   }
 
-  if (isEditing) {
+  if (isEditing && !isReadOnly && onUpdateTask) {
     return (
       <TaskForm
         initialValues={{
@@ -912,69 +1007,91 @@ function TaskDetail({
           {task.deadline && (
             <Detail.Metadata.Label title="Deadline" text={new Date(task.deadline).toLocaleDateString()} />
           )}
+          {task.expectedDuration && (
+            <Detail.Metadata.Label title="Expected Duration" text={formatDuration(task.expectedDuration)} />
+          )}
         </Detail.Metadata>
       }
       actions={
         <ActionPanel>
-          <Action
-            title={task.status === "done" ? "Mark as Undone" : "Mark as Done"}
-            icon={Icon.CheckCircle}
-            onAction={handleToggleStatus}
-          />
-          <Action
-            title="Edit Description"
-            icon={Icon.Document}
-            shortcut={{ modifiers: ["cmd", "shift"], key: "e" }}
-            onAction={() => setIsEditing(true)}
-          />
-          <Action.Push
-            title="Edit Task"
-            icon={Icon.Pencil}
-            shortcut={{ modifiers: ["cmd"], key: "i" }}
-            target={
-              <TaskForm
-                initialValues={{
-                  title: task.title,
-                  description: task.description,
-                  priority: task.priority,
-                  deadline: task.deadline ? new Date(task.deadline) : null,
-                  github: task.github,
-                }}
-                submitTitle="Update Task"
-                onSubmit={async (values) => {
-                  const updatedTask = {
-                    ...task,
-                    ...values,
-                    priority: values.priority as TaskPriority,
-                    deadline: values.deadline ? values.deadline.getTime() : null,
-                  };
-                  setTask(updatedTask);
-                  await onUpdateTask(updatedTask);
-                  await showToast({ style: Toast.Style.Success, title: "Task updated" });
-                }}
+          {!isReadOnly && (
+            <Action
+              title={task.status === "done" ? "Mark as Undone" : "Mark as Done"}
+              icon={Icon.CheckCircle}
+              onAction={handleToggleStatus}
+            />
+          )}
+          {!isReadOnly && (
+            <Action
+              title="Edit Description"
+              icon={Icon.Document}
+              shortcut={{ modifiers: ["cmd", "shift"], key: "e" }}
+              onAction={() => setIsEditing(true)}
+            />
+          )}
+          {!isReadOnly && onUpdateTask && (
+            <Action.Push
+              title="Edit Task"
+              icon={Icon.Pencil}
+              shortcut={{ modifiers: ["cmd"], key: "i" }}
+              target={
+                <TaskForm
+                  initialValues={{
+                    title: task.title,
+                    description: task.description,
+                    priority: task.priority,
+                    deadline: task.deadline ? new Date(task.deadline) : null,
+                    github: task.github,
+                    expectedDuration: task.expectedDuration?.toString(),
+                  }}
+                  submitTitle="Update Task"
+                  onSubmit={async (values) => {
+                    const updatedTask = {
+                      ...task,
+                      ...values,
+                      priority: values.priority as TaskPriority,
+                      deadline: values.deadline ? values.deadline.getTime() : null,
+                      expectedDuration: values.expectedDuration ? parseInt(values.expectedDuration) : undefined,
+                    };
+                    setTask(updatedTask);
+                    await onUpdateTask(updatedTask);
+                    await showToast({ style: Toast.Style.Success, title: "Task updated" });
+                  }}
+                />
+              }
+            />
+          )}
+          {task.github && (
+            <Action.OpenInBrowser
+              url={task.github.url}
+              title="Open in GitHub"
+              shortcut={{ modifiers: ["opt"], key: "enter" }}
+            />
+          )}
+          {!isReadOnly && (
+            <>
+              <Action
+                title="Pause Task"
+                icon={Icon.Pause}
+                shortcut={{ modifiers: ["cmd", "shift"], key: "p" }}
+                onAction={() => handleSetStatus("paused")}
               />
-            }
-          />
-          <Action
-            title="Pause Task"
-            icon={Icon.Pause}
-            shortcut={{ modifiers: ["cmd", "shift"], key: "p" }}
-            onAction={() => handleSetStatus("paused")}
-          />
-          <Action
-            title="Start Task"
-            icon={Icon.Play}
-            shortcut={{ modifiers: ["cmd", "shift"], key: "s" }}
-            onAction={() => handleSetStatus("in-progress")}
-          />
-          <ActionPanel.Submenu title="Change Status" icon={Icon.Pencil}>
-            <Action title="In Progress" onAction={() => handleSetStatus("in-progress")} />
-            <Action title="Waiting for Review" onAction={() => handleSetStatus("waiting-for-review")} />
-            <Action title="Ready to Merge" onAction={() => handleSetStatus("ready-to-merge")} />
-            <Action title="To-Do" onAction={() => handleSetStatus("todo")} />
-            <Action title="Paused" onAction={() => handleSetStatus("paused")} />
-            <Action title="Done" onAction={() => handleSetStatus("done")} />
-          </ActionPanel.Submenu>
+              <Action
+                title="Start Task"
+                icon={Icon.Play}
+                shortcut={{ modifiers: ["cmd", "shift"], key: "s" }}
+                onAction={() => handleSetStatus("in-progress")}
+              />
+              <ActionPanel.Submenu title="Change Status" icon={Icon.Pencil}>
+                <Action title="In Progress" onAction={() => handleSetStatus("in-progress")} />
+                <Action title="Waiting for Review" onAction={() => handleSetStatus("waiting-for-review")} />
+                <Action title="Ready to Merge" onAction={() => handleSetStatus("ready-to-merge")} />
+                <Action title="To-Do" onAction={() => handleSetStatus("todo")} />
+                <Action title="Paused" onAction={() => handleSetStatus("paused")} />
+                <Action title="Done" onAction={() => handleSetStatus("done")} />
+              </ActionPanel.Submenu>
+            </>
+          )}
           {onUndo && (
             <Action
               title="Undo"
@@ -991,14 +1108,15 @@ function TaskDetail({
               onAction={handleRedoWrapped}
             />
           )}
-          <Action.Push
-            title="Create New Profile"
-            icon={Icon.Person}
-            shortcut={{ modifiers: ["cmd", "shift"], key: "n" }}
-            target={<CreateProfileForm onCreate={onCreateProfile} />}
-          />
-
-          {!isDefaultProfile && (
+          {!isReadOnly && onCreateProfile && (
+            <Action.Push
+              title="Create New Profile"
+              icon={Icon.Person}
+              shortcut={{ modifiers: ["cmd", "shift"], key: "n" }}
+              target={<CreateProfileForm onCreate={onCreateProfile} />}
+            />
+          )}
+          {!isReadOnly && !isDefaultProfile && onDeleteProfile && (
             <Action
               title="Delete Current Profile"
               icon={Icon.Trash}

@@ -1,13 +1,18 @@
 import { LocalStorage } from "@raycast/api";
-import { Task } from "./types";
+import { Task, TaskWithDate, Routine } from "./types";
 import { syncDailyNote } from "./apple-notes";
 
 const TASKS_KEY_PREFIX = "tasks_";
+const ROUTINES_KEY = "routines";
+const LAST_ROUTINE_RESET_DATE_KEY = "last_routine_reset_date";
 export const DEFAULT_PROFILE = "Work";
 const PROFILES_KEY = "profiles";
 
 export function getDateString(date: Date): string {
-  return date.toISOString().split("T")[0];
+  const year = date.getFullYear();
+  const month = String(date.getMonth() + 1).padStart(2, "0");
+  const day = String(date.getDate()).padStart(2, "0");
+  return `${year}-${month}-${day}`;
 }
 
 function getTaskKey(date: Date, profile: string): string {
@@ -82,9 +87,19 @@ export async function saveTasks(date: Date, tasks: Task[], profile: string = DEF
   await LocalStorage.setItem(dateKey, JSON.stringify(tasks));
 
   // Fire and forget sync to avoid blocking UI
-  // Only sync default profile to Apple Notes for now (or strictly follow current behavior)
-  // Fire and forget sync to avoid blocking UI
-  syncDailyNote(date, tasks, profile).catch((e) => console.error("Background sync failed", e));
+  // Gather all profiles tasks for the sync
+  const profiles = await getProfiles();
+  const tasksMap: Record<string, Task[]> = {};
+
+  for (const p of profiles) {
+    if (p === profile) {
+      tasksMap[p] = tasks;
+    } else {
+      tasksMap[p] = await getTasks(date, p);
+    }
+  }
+
+  syncDailyNote(date, tasksMap).catch((e) => console.error("Background sync failed", e));
 }
 
 export async function createTask(
@@ -120,105 +135,247 @@ export async function deleteTask(
   await saveTasks(date, newTasks, profile);
 }
 
-export async function migrateTasksToToday(profile: string = DEFAULT_PROFILE): Promise<number> {
+export async function migrateAllTasksToToday(): Promise<number> {
   const today = new Date();
   const todayStr = getDateString(today);
-  const allItems = await LocalStorage.allItems();
-  let migratoryCount = 0;
-  const migratedTasks: Task[] = [];
 
-  // Construct a prefix that matches this profile's keys
-  // Default: "tasks_"
-  // Custom: "tasks_MyProfile_"
-  let searchPrefix = TASKS_KEY_PREFIX;
-  if (profile !== DEFAULT_PROFILE) {
-    searchPrefix = `${TASKS_KEY_PREFIX}${profile}_`;
+  // Check if migration already ran today
+  const lastMigrationDate = await LocalStorage.getItem<string>("last_migration_date");
+  if (lastMigrationDate === todayStr) {
+    return 0;
   }
 
+  const allItems = await LocalStorage.allItems();
+  let totalMigratedCount = 0;
+  const migrationUpdates: Record<string, Task[]> = {}; // key -> new task list json string
+  const targetUpdates: Record<string, Task[]> = {}; // profile -> tasks to add to today
+
+  // First pass: scanning all keys to find what to move
   for (const [key, value] of Object.entries(allItems)) {
-    if (!key.startsWith(searchPrefix)) continue;
+    if (!key.startsWith(TASKS_KEY_PREFIX)) continue;
 
-    // Check if it belongs strictly to this profile
-    // If we are looking for default profile (tasks_), we must ensure it's NOT a custom profile key (tasks_Work_...)
-    // Actually, getTaskKey logic:
-    // Default: tasks_2023-01-01
-    // Custom: tasks_Work_2023-01-01
-    // So if profile is default, we want keys that start with "tasks_" followed immediately by a digit (start of date)
-    // RegExp check might be safer or just string manipulation
-
+    let profile = DEFAULT_PROFILE;
     let dateStr = "";
-    if (profile === DEFAULT_PROFILE) {
-      // key is tasks_YYYY-MM-DD
-      // The checking logic: the character after "tasks_" should be a digit for a date.
-      // Or we can rely on split/length.
-      // tasks_Work_2023... -> split(_) -> [tasks, Work, 2023...] (3 parts)
-      // tasks_2023... -> split(_) -> [tasks, 2023...] (2 parts)
-      // But profiles can have underscores? Let's assume Profile names are simple for now or we just iterate carefully.
-      // Safer:
-      // formatted key for a date is exactly what getTaskKey returns.
-      // But we are iterating ALL keys.
+    const suffix = key.slice(TASKS_KEY_PREFIX.length);
 
-      // Easier logic:
-      // We know the prefix.
-      const suffix = key.slice(searchPrefix.length);
-      // If it's the default profile, the suffix MUST look like a date "YYYY-MM-DD".
-      // If it's a custom profile, the suffix MUST look like a date "YYYY-MM-DD".
-      // AND for default profile, we must ensure we aren't picking up "tasks_Work_..." which also starts with "tasks_"
-
-      // If profile is default, searchPrefix is "tasks_".
-      // "tasks_Work_2023-01-01" starts with "tasks_".
-      // But the suffix "Work_2023-01-01" does not look like a date.
-
-      if (!/^\d{4}-\d{2}-\d{2}$/.test(suffix)) {
-        continue;
-      }
+    // Check for default profile keys: tasks_YYYY-MM-DD
+    if (/^\d{4}-\d{2}-\d{2}$/.test(suffix)) {
+      profile = DEFAULT_PROFILE;
       dateStr = suffix;
     } else {
-      // Custom profile. Search prefix is "tasks_{Profile}_".
-      // The suffix shoud be the date.
-      const suffix = key.slice(searchPrefix.length);
-      if (!/^\d{4}-\d{2}-\d{2}$/.test(suffix)) {
-        continue;
-      }
-      dateStr = suffix;
+      // Check for custom profile keys: tasks_ProfileName_YYYY-MM-DD
+      const parts = suffix.split("_");
+      const datePart = parts[parts.length - 1];
+
+      if (!/^\d{4}-\d{2}-\d{2}$/.test(datePart)) continue;
+
+      // Reconstruct profile name (everything before the date)
+      profile = parts.slice(0, -1).join("_");
+      dateStr = datePart;
     }
 
     if (dateStr >= todayStr) continue; // Skip today and future
 
     try {
       const tasks: Task[] = JSON.parse(value);
-      let hasChanges = false;
       const remainingTasks: Task[] = [];
+      const tasksToMigrate: Task[] = [];
 
       for (const task of tasks) {
         if (task.status !== "done") {
-          migratedTasks.push(task);
-          migratoryCount++;
-          hasChanges = true;
+          tasksToMigrate.push(task);
         } else {
           remainingTasks.push(task);
         }
       }
 
-      if (hasChanges) {
-        await LocalStorage.setItem(key, JSON.stringify(remainingTasks));
+      if (tasksToMigrate.length > 0) {
+        // Schedule update for the old key (removing moved tasks)
+        migrationUpdates[key] = remainingTasks;
+
+        // Schedule adding to today's list for this profile
+        if (!targetUpdates[profile]) {
+          targetUpdates[profile] = [];
+        }
+        targetUpdates[profile].push(...tasksToMigrate);
+        totalMigratedCount += tasksToMigrate.length;
       }
     } catch (e) {
       console.error(`Failed to parse tasks for key ${key}`, e);
     }
   }
 
-  if (migratedTasks.length > 0) {
-    const todayTasks = await getTasks(today, profile);
-    // Avoid duplicates by ID
-    const existingIds = new Set(todayTasks.map((t) => t.id));
-    const uniqueMigrated = migratedTasks.filter((t) => !existingIds.has(t.id));
+  // Second pass: apply updates
+  // 1. Update old keys (remove moved tasks)
+  for (const [key, remainingTasks] of Object.entries(migrationUpdates)) {
+    await LocalStorage.setItem(key, JSON.stringify(remainingTasks));
+  }
 
-    if (uniqueMigrated.length > 0) {
-      const newTaskList = [...todayTasks, ...uniqueMigrated];
-      await saveTasks(today, newTaskList, profile);
+  // 2. Add moved tasks to today's lists
+  if (totalMigratedCount > 0) {
+    for (const [profile, movedTasks] of Object.entries(targetUpdates)) {
+      const todayTasks = await getTasks(today, profile);
+
+      // Avoid duplicates by ID (sanity check, though logic shouldn't produce them if date keys are unique)
+      const existingIds = new Set(todayTasks.map((t) => t.id));
+      const uniqueMoved = movedTasks.filter((t) => !existingIds.has(t.id));
+
+      if (uniqueMoved.length > 0) {
+        const newTaskList = [...todayTasks, ...uniqueMoved];
+        await saveTasks(today, newTaskList, profile);
+      }
     }
   }
 
-  return migratoryCount;
+  // Mark migration as done for today
+  await LocalStorage.setItem("last_migration_date", todayStr);
+
+  return totalMigratedCount;
+}
+
+export function formatDuration(minutes: number): string {
+  if (!minutes) return "";
+  if (minutes < 60) {
+    return `${minutes} min`;
+  }
+
+  const days = Math.floor(minutes / (60 * 24));
+  const remainingMinutesAfterDays = minutes % (60 * 24);
+  const hours = Math.floor(remainingMinutesAfterDays / 60);
+  const remainingMinutes = remainingMinutesAfterDays % 60;
+
+  const parts = [];
+  if (days > 0) parts.push(`${days} ${days === 1 ? "day" : "days"}`);
+  if (hours > 0) parts.push(`${hours} ${hours === 1 ? "hr" : "hrs"}`);
+  if (remainingMinutes > 0) parts.push(`${remainingMinutes} min`);
+
+  return parts.join(" ");
+}
+
+export async function getAllUndoneTasks(): Promise<Record<string, TaskWithDate[]>> {
+  const allItems = await LocalStorage.allItems();
+  const activeProfiles = await getProfiles();
+  const activeProfilesSet = new Set(activeProfiles);
+  const tasksByProfile: Record<string, TaskWithDate[]> = {};
+
+  // Helper to add task to profile bucket
+  const addTaskToProfile = (profile: string, task: Task, date: string) => {
+    if (!tasksByProfile[profile]) {
+      tasksByProfile[profile] = [];
+    }
+    if (task.status !== "done") {
+      tasksByProfile[profile].push({ ...task, date });
+    }
+  };
+
+  for (const [key, value] of Object.entries(allItems)) {
+    if (!key.startsWith(TASKS_KEY_PREFIX)) continue;
+
+    let profile = DEFAULT_PROFILE;
+    let dateStr = "";
+    const suffix = key.slice(TASKS_KEY_PREFIX.length);
+
+    // Check for default profile keys: tasks_YYYY-MM-DD
+    if (/^\d{4}-\d{2}-\d{2}$/.test(suffix)) {
+      profile = DEFAULT_PROFILE;
+      dateStr = suffix;
+    } else {
+      // Check for custom profile keys: tasks_ProfileName_YYYY-MM-DD
+      const parts = suffix.split("_");
+      const datePart = parts[parts.length - 1];
+
+      if (!/^\d{4}-\d{2}-\d{2}$/.test(datePart)) continue;
+
+      // Reconstruct profile name (everything before the date)
+      profile = parts.slice(0, -1).join("_");
+      dateStr = datePart;
+    }
+
+    if (!activeProfilesSet.has(profile)) continue;
+
+    try {
+      const tasks: Task[] = JSON.parse(value);
+      tasks.forEach((task) => addTaskToProfile(profile, task, dateStr));
+    } catch (e) {
+      console.error(`Failed to parse tasks for key ${key}`, e);
+    }
+  }
+
+  return tasksByProfile;
+}
+
+export const priorityOrder = { high: 3, medium: 2, low: 1 };
+export const sortTasks = <T extends Task>(taskList: T[]) => {
+  return [...taskList].sort((a, b) => {
+    // 1. Priority
+    const priorityDiff = priorityOrder[b.priority] - priorityOrder[a.priority];
+    if (priorityDiff !== 0) return priorityDiff;
+
+    // 2. Earliest Deadline
+    if (a.deadline && !b.deadline) return -1;
+    if (!a.deadline && b.deadline) return 1;
+    if (a.deadline && b.deadline) {
+      const deadlineDiff = a.deadline - b.deadline;
+      if (deadlineDiff !== 0) return deadlineDiff;
+    }
+
+    // 3. Shortest Expected Duration
+    if (a.expectedDuration && !b.expectedDuration) return -1;
+    if (!a.expectedDuration && b.expectedDuration) return 1;
+    if (a.expectedDuration && b.expectedDuration) {
+      return a.expectedDuration - b.expectedDuration;
+    }
+
+    return 0;
+  });
+};
+
+export async function getRoutines(): Promise<Routine[]> {
+  // 1. Check if reset needed
+  const todayStr = getDateString(new Date());
+  const lastResetDate = await LocalStorage.getItem<string>(LAST_ROUTINE_RESET_DATE_KEY);
+
+  let routines: Routine[] = [];
+  const data = await LocalStorage.getItem<string>(ROUTINES_KEY);
+  if (data) {
+    try {
+      routines = JSON.parse(data);
+    } catch {
+      routines = [];
+    }
+  }
+
+  if (lastResetDate !== todayStr) {
+    // Reset all routines to 'todo'
+    routines = routines.map((r) => ({ ...r, status: "todo" }));
+    await LocalStorage.setItem(ROUTINES_KEY, JSON.stringify(routines));
+    await LocalStorage.setItem(LAST_ROUTINE_RESET_DATE_KEY, todayStr);
+  }
+
+  return routines;
+}
+
+export async function saveRoutines(routines: Routine[]): Promise<void> {
+  await LocalStorage.setItem(ROUTINES_KEY, JSON.stringify(routines));
+}
+
+export async function createRoutine(routine: Routine): Promise<void> {
+  const routines = await getRoutines();
+  routines.push(routine);
+  await saveRoutines(routines);
+}
+
+export async function updateRoutine(updatedRoutine: Routine): Promise<void> {
+  const routines = await getRoutines();
+  const index = routines.findIndex((r) => r.id === updatedRoutine.id);
+  if (index !== -1) {
+    routines[index] = updatedRoutine;
+    await saveRoutines(routines);
+  }
+}
+
+export async function deleteRoutine(id: string): Promise<void> {
+  const routines = await getRoutines();
+  const newRoutines = routines.filter((r) => r.id !== id);
+  await saveRoutines(newRoutines);
 }
