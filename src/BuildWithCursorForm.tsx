@@ -10,11 +10,7 @@ interface BuildWithCursorFormProps {
 export default function BuildWithCursorForm({ task }: BuildWithCursorFormProps) {
   const [isLoading, setIsLoading] = useState(false);
 
-  async function handleSubmit(values: {
-    directory: string[];
-    branchName: string;
-    baseBranch: string;
-  }) {
+  async function handleSubmit(values: { directory: string[]; branchName: string; baseBranch: string }) {
     if (!values.directory || values.directory.length === 0) {
       await showToast({ style: Toast.Style.Failure, title: "Please select a directory" });
       return;
@@ -31,7 +27,7 @@ export default function BuildWithCursorForm({ task }: BuildWithCursorFormProps) 
       const directory = values.directory[0];
       const baseBranch = values.baseBranch.trim() || "staging";
       const branchName = values.branchName.trim();
-      
+
       // Escape special characters in the prompt for shell
       const promptTitle = task.title.replace(/\\/g, "\\\\").replace(/"/g, '\\"');
       const promptDescription = task.description.replace(/\\/g, "\\\\").replace(/"/g, '\\"').replace(/\n/g, "\\n");
@@ -39,7 +35,7 @@ export default function BuildWithCursorForm({ task }: BuildWithCursorFormProps) 
 
       // Build the full command sequence
       const command = `cd "${directory}" && git checkout ${baseBranch} && git pull && git checkout -b "${branchName}" && agent --mode=plan "${prompt}"`;
-      
+
       // Escape the command for AppleScript
       const escapedCommand = command.replace(/\\/g, "\\\\").replace(/"/g, '\\"');
 
@@ -79,10 +75,7 @@ export default function BuildWithCursorForm({ task }: BuildWithCursorFormProps) 
         </ActionPanel>
       }
     >
-      <Form.Description
-        title="Task"
-        text={task.title}
-      />
+      <Form.Description title="Task" text={task.title} />
       <Form.FilePicker
         id="directory"
         title="Repository Directory"
@@ -90,11 +83,7 @@ export default function BuildWithCursorForm({ task }: BuildWithCursorFormProps) 
         canChooseDirectories
         canChooseFiles={false}
       />
-      <Form.TextField
-        id="branchName"
-        title="Branch Name"
-        placeholder="feature/my-new-feature"
-      />
+      <Form.TextField id="branchName" title="Branch Name" placeholder="feature/my-new-feature" />
       <Form.TextField
         id="baseBranch"
         title="Base Branch"

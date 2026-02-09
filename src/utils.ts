@@ -4,6 +4,7 @@ import { syncDailyNote } from "./apple-notes";
 
 const TASKS_KEY_PREFIX = "tasks_";
 const ROUTINES_KEY = "routines";
+const ROUTINE_COMPLETIONS_KEY = "routine_completions";
 const LAST_ROUTINE_RESET_DATE_KEY = "last_routine_reset_date";
 export const DEFAULT_PROFILE = "Work";
 const PROFILES_KEY = "profiles";
@@ -378,4 +379,77 @@ export async function deleteRoutine(id: string): Promise<void> {
   const routines = await getRoutines();
   const newRoutines = routines.filter((r) => r.id !== id);
   await saveRoutines(newRoutines);
+}
+
+export async function logRoutineCompletion(date: Date, increment: boolean): Promise<void> {
+  const dateStr = getDateString(date);
+  const data = await LocalStorage.getItem<string>(ROUTINE_COMPLETIONS_KEY);
+  let completions: Record<string, number> = {};
+  if (data) {
+    try {
+      completions = JSON.parse(data);
+    } catch {
+      completions = {};
+    }
+  }
+
+  const currentCount = completions[dateStr] || 0;
+  if (increment) {
+    completions[dateStr] = currentCount + 1;
+  } else {
+    completions[dateStr] = Math.max(0, currentCount - 1);
+  }
+
+  await LocalStorage.setItem(ROUTINE_COMPLETIONS_KEY, JSON.stringify(completions));
+}
+
+export async function getTaskCompletionHistory(): Promise<Record<string, number>> {
+  const allItems = await LocalStorage.allItems();
+  const history: Record<string, number> = {};
+
+  // 1. Scan Tasks
+  for (const [key, value] of Object.entries(allItems)) {
+    if (!key.startsWith(TASKS_KEY_PREFIX)) continue;
+
+    // Extract date from key
+    let dateStr = "";
+    const suffix = key.slice(TASKS_KEY_PREFIX.length);
+
+    if (/^\d{4}-\d{2}-\d{2}$/.test(suffix)) {
+      dateStr = suffix;
+    } else {
+      const parts = suffix.split("_");
+      const datePart = parts[parts.length - 1];
+      if (/^\d{4}-\d{2}-\d{2}$/.test(datePart)) {
+        dateStr = datePart;
+      }
+    }
+
+    if (!dateStr) continue;
+
+    try {
+      const tasks: Task[] = JSON.parse(value);
+      const completedCount = tasks.filter((t) => t.status === "done").length;
+      if (completedCount > 0) {
+        history[dateStr] = (history[dateStr] || 0) + completedCount;
+      }
+    } catch {
+      // ignore
+    }
+  }
+
+  // 2. Scan Routine Completions
+  const routineData = await LocalStorage.getItem<string>(ROUTINE_COMPLETIONS_KEY);
+  if (routineData) {
+    try {
+      const routineCompletions: Record<string, number> = JSON.parse(routineData);
+      for (const [dateStr, count] of Object.entries(routineCompletions)) {
+        history[dateStr] = (history[dateStr] || 0) + count;
+      }
+    } catch {
+      // ignore
+    }
+  }
+
+  return history;
 }
