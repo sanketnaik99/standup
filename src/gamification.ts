@@ -1,4 +1,4 @@
-import { LocalStorage, showToast, Toast } from "@raycast/api";
+import { LocalStorage, showToast, Toast, confirmAlert, Alert } from "@raycast/api";
 import { Routine, Task, UserStats } from "./types";
 import { getDateString } from "./utils";
 
@@ -152,6 +152,31 @@ export async function processTaskCompletion(
     }
 
     return { stats, xpAwarded: true, leveledUp, bonusXp: bonusXp > 0 ? bonusXp : undefined };
+}
+
+export async function showGamificationAlerts(leveledUp: boolean, bonusXp?: number) {
+    if (leveledUp && bonusXp) {
+        await confirmAlert({
+            title: "🎉 Level Up & Random Drop! 🎁",
+            message: `You reached the next level AND found a random drop of ${bonusXp} XP! Outstanding!`,
+            primaryAction: { title: "Let's Go!" },
+            dismissAction: { title: "Close" },
+        });
+    } else if (leveledUp) {
+        await confirmAlert({
+            title: "🎉 Level Up!",
+            message: `You reached the next level! Keep up the great work!`,
+            primaryAction: { title: "Let's Go!" },
+            dismissAction: { title: "Close" },
+        });
+    } else if (bonusXp) {
+        await confirmAlert({
+            title: "Random Drop! 🎁",
+            message: `You found a random XP drop of ${bonusXp} XP!`,
+            primaryAction: { title: "Awesome!" },
+            dismissAction: { title: "Close" },
+        });
+    }
 }
 
 export function generateTaskGarden(history: Record<string, number>): string {

@@ -33,7 +33,7 @@ import CreateProfileForm from "./CreateProfileForm";
 import BuildWithCursorForm from "./BuildWithCursorForm";
 
 import { v4 as uuidv4 } from "uuid";
-import { getUserStats, getXpRequiredForNextLevel, processTaskCompletion, getProgressBar, saveUserStats } from "./gamification";
+import { getUserStats, getXpRequiredForNextLevel, processTaskCompletion, getProgressBar, saveUserStats, showGamificationAlerts } from "./gamification";
 import { UserStats } from "./types";
 
 interface TaskListViewProps {
@@ -621,21 +621,7 @@ function TaskItem({
         if (newStatus === "done" && task.status !== "done") {
             const { xpAwarded, bonusXp, leveledUp } = await processTaskCompletion(task, "task");
             if (xpAwarded) {
-                if (leveledUp) {
-                    await confirmAlert({
-                        title: "🎉 Level Up!",
-                        message: `You reached the next level! Keep up the great work!`,
-                        primaryAction: { title: "Let's Go!" },
-                        dismissAction: { title: "Close" },
-                    });
-                } else if (bonusXp) {
-                    await confirmAlert({
-                        title: "Random Drop! 🎁",
-                        message: `You found a random XP drop of ${bonusXp} XP!`,
-                        primaryAction: { title: "Awesome!" },
-                        dismissAction: { title: "Close" },
-                    });
-                }
+                await showGamificationAlerts(!!leveledUp, bonusXp);
                 await onUpdateTask({ ...task, status: newStatus, xpAwarded: true });
                 onStatsChange();
                 return;
@@ -649,21 +635,7 @@ function TaskItem({
         if (status === "done" && task.status !== "done") {
             const { xpAwarded, bonusXp, leveledUp } = await processTaskCompletion(task, "task");
             if (xpAwarded) {
-                if (leveledUp) {
-                    await confirmAlert({
-                        title: "🎉 Level Up!",
-                        message: `You reached the next level! Keep up the great work!`,
-                        primaryAction: { title: "Let's Go!" },
-                        dismissAction: { title: "Close" },
-                    });
-                } else if (bonusXp) {
-                    await confirmAlert({
-                        title: "Random Drop! 🎁",
-                        message: `You found a random XP drop of ${bonusXp} XP!`,
-                        primaryAction: { title: "Awesome!" },
-                        dismissAction: { title: "Close" },
-                    });
-                }
+                await showGamificationAlerts(!!leveledUp, bonusXp);
                 await onUpdateTask({ ...task, status, xpAwarded: true });
                 onStatsChange();
                 return;

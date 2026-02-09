@@ -24,7 +24,7 @@ import {
 } from "./utils";
 import RoutineForm from "./RoutineForm";
 import { v4 as uuidv4 } from "uuid";
-import { getUserStats, getXpRequiredForNextLevel, processTaskCompletion, getProgressBar } from "./gamification";
+import { getUserStats, getXpRequiredForNextLevel, processTaskCompletion, getProgressBar, showGamificationAlerts } from "./gamification";
 import { UserStats } from "./types";
 
 export default function RoutineListView() {
@@ -197,21 +197,7 @@ function RoutineItem({
         if (newStatus === "done" && routine.status !== "done") {
             const { xpAwarded, bonusXp, leveledUp } = await processTaskCompletion(routine, "routine");
             if (xpAwarded) {
-                if (leveledUp) {
-                    await confirmAlert({
-                        title: "🎉 Level Up!",
-                        message: `You reached the next level! Keep up the great work!`,
-                        primaryAction: { title: "Let's Go!" },
-                        dismissAction: { title: "Close" },
-                    });
-                } else if (bonusXp) {
-                    await confirmAlert({
-                        title: "Random Drop! 🎁",
-                        message: `You found a random XP drop of ${bonusXp} XP!`,
-                        primaryAction: { title: "Awesome!" },
-                        dismissAction: { title: "Close" },
-                    });
-                }
+                await showGamificationAlerts(!!leveledUp, bonusXp);
                 await onUpdate({ ...routine, status: newStatus, lastXpAwardedDate: getDateString(new Date()) });
                 await logRoutineCompletion(new Date(), true);
                 onStatsChange(); //  lgtm [nopreview]
@@ -230,21 +216,7 @@ function RoutineItem({
         if (status === "done" && routine.status !== "done") {
             const { xpAwarded, bonusXp, leveledUp } = await processTaskCompletion(routine, "routine");
             if (xpAwarded) {
-                if (leveledUp) {
-                    await confirmAlert({
-                        title: "🎉 Level Up!",
-                        message: `You reached the next level! Keep up the great work!`,
-                        primaryAction: { title: "Let's Go!" },
-                        dismissAction: { title: "Close" },
-                    });
-                } else if (bonusXp) {
-                    await confirmAlert({
-                        title: "Random Drop! 🎁",
-                        message: `You found a random XP drop of ${bonusXp} XP!`,
-                        primaryAction: { title: "Awesome!" },
-                        dismissAction: { title: "Close" },
-                    });
-                }
+                await showGamificationAlerts(!!leveledUp, bonusXp);
                 await onUpdate({ ...routine, status, lastXpAwardedDate: getDateString(new Date()) });
                 await logRoutineCompletion(new Date(), true);
                 onStatsChange();
@@ -395,21 +367,7 @@ function RoutineDetail({
         if (status === "done" && routine.status !== "done") {
             const { xpAwarded, bonusXp, leveledUp } = await processTaskCompletion(routine, "routine");
             if (xpAwarded) {
-                if (leveledUp) {
-                    await confirmAlert({
-                        title: "🎉 Level Up!",
-                        message: `You reached the next level! Keep up the great work!`,
-                        primaryAction: { title: "Let's Go!" },
-                        dismissAction: { title: "Close" },
-                    });
-                } else if (bonusXp) {
-                    await confirmAlert({
-                        title: "Random Drop! 🎁",
-                        message: `You found a random XP drop of ${bonusXp} XP!`,
-                        primaryAction: { title: "Awesome!" },
-                        dismissAction: { title: "Close" },
-                    });
-                }
+                await showGamificationAlerts(!!leveledUp, bonusXp);
                 const updatedRoutine = { ...routine, status, lastXpAwardedDate: getDateString(new Date()) };
                 setRoutine(updatedRoutine);
                 await onUpdate(updatedRoutine);
