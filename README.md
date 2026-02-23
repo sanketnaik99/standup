@@ -20,6 +20,20 @@ A task tracker built into Raycast that syncs with external data stores.
 
 ## Configuration
 
+### Clerk OAuth Login
+
+Use the `Login` command in Raycast to sign in with Clerk OAuth.
+
+- Provider: Clerk
+- Redirect URI: `https://raycast.com/redirect/extension`
+- Scopes: `email offline_access profile`
+
+In Clerk, allow the redirect URI above exactly as written (character-for-character).
+
+If login still fails, verify your Clerk OAuth app is configured as a public PKCE client (no client secret required in this extension).
+
+This currently sets up authentication only. Existing task commands continue to use the GitHub Personal Access Token flow below.
+
 ### GitHub Integration
 
 To enable GitHub integration (fetching issue details, status tracking):

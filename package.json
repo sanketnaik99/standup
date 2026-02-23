@@ -41,6 +41,13 @@
             "subtitle": "View tasks for a specific date",
             "description": "Select a date to view tasks",
             "mode": "view"
+        },
+        {
+            "name": "login",
+            "title": "Login",
+            "subtitle": "Sign in with Clerk",
+            "description": "Authenticate with Clerk OAuth",
+            "mode": "view"
         }
     ],
     "preferences": [
