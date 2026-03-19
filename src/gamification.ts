@@ -1,4 +1,4 @@
-import { LocalStorage, showToast, Toast } from "@raycast/api";
+import { LocalStorage, showToast, Toast, confirmAlert, Alert } from "@raycast/api";
 import { Routine, Task, UserStats } from "./types";
 import { getDateString } from "./utils";
 
@@ -40,9 +40,9 @@ export function calculateTaskXp(task: Task): number {
 
     // Priority Bonus
     if (task.priority === "medium") {
-        xp += 50;
-    } else if (task.priority === "high") {
         xp += 100;
+    } else if (task.priority === "high") {
+        xp += 200;
     }
 
     return xp;
@@ -57,6 +57,18 @@ export function calculateRoutineXp(routine: Routine): number {
     }
 
     return xp;
+}
+
+export function getProgressBar(currentXp: number, nextLevelXp: number, length = 10): string {
+    const progress = Math.min(Math.max(currentXp / nextLevelXp, 0), 1);
+    const filledLength = Math.round(length * progress);
+    const emptyLength = length - filledLength;
+
+    // using clean blocks
+    const filled = "█".repeat(filledLength);
+    const empty = "□".repeat(emptyLength);
+
+    return `${filled}${empty}`;
 }
 
 export async function addXp(amount: number): Promise<{ stats: UserStats; leveledUp: boolean }> {
@@ -97,10 +109,13 @@ export async function addXp(amount: number): Promise<{ stats: UserStats; leveled
     return { stats, leveledUp };
 }
 
+const BONUS_DROP_CHANCE = 0.3;
+const BONUS_XP_AMOUNT = 300;
+
 export async function processTaskCompletion(
     task: Task | Routine,
     type: "task" | "routine",
-): Promise<{ stats: UserStats; xpAwarded: boolean }> {
+): Promise<{ stats: UserStats; xpAwarded: boolean; leveledUp?: boolean; bonusXp?: number }> {
     // XP Validation Logic
     if (type === "task") {
         const t = task as Task;
@@ -115,15 +130,19 @@ export async function processTaskCompletion(
         }
     }
 
-    const xp = type === "task" ? calculateTaskXp(task as Task) : calculateRoutineXp(task as Routine);
+    let xp = type === "task" ? calculateTaskXp(task as Task) : calculateRoutineXp(task as Routine);
+
+    // Check for random bonus drop
+    let bonusXp = 0;
+    if (Math.random() < BONUS_DROP_CHANCE) {
+        bonusXp = BONUS_XP_AMOUNT;
+        xp += bonusXp;
+    }
+
     const { stats, leveledUp } = await addXp(xp);
 
     if (leveledUp) {
-        await showToast({
-            style: Toast.Style.Success,
-            title: "🎉 Level Up!",
-            message: `You are now Level ${stats.level}!`,
-        });
+        // Level up toast removed, handled by UI popup
     } else {
         await showToast({
             style: Toast.Style.Success,
@@ -132,5 +151,64 @@ export async function processTaskCompletion(
         });
     }
 
-    return { stats, xpAwarded: true };
+    return { stats, xpAwarded: true, leveledUp, bonusXp: bonusXp > 0 ? bonusXp : undefined };
+}
+
+export async function showGamificationAlerts(leveledUp: boolean, bonusXp?: number) {
+    if (leveledUp && bonusXp) {
+        await confirmAlert({
+            title: "🎉 Level Up & Random Drop! 🎁",
+            message: `You reached the next level AND found a random drop of ${bonusXp} XP! Outstanding!`,
+            primaryAction: { title: "Let's Go!" },
+            dismissAction: { title: "Close" },
+        });
+    } else if (leveledUp) {
+        await confirmAlert({
+            title: "🎉 Level Up!",
+            message: `You reached the next level! Keep up the great work!`,
+            primaryAction: { title: "Let's Go!" },
+            dismissAction: { title: "Close" },
+        });
+    } else if (bonusXp) {
+        await confirmAlert({
+            title: "Random Drop! 🎁",
+            message: `You found a random XP drop of ${bonusXp} XP!`,
+            primaryAction: { title: "Awesome!" },
+            dismissAction: { title: "Close" },
+        });
+    }
+}
+
+export function generateTaskGarden(history: Record<string, number>): string {
+    const today = new Date();
+    const days: { label: string; plant: string; count: number }[] = [];
+
+    // Last 7 days for the garden
+    for (let i = 6; i >= 0; i--) {
+        const date = new Date(today);
+        date.setDate(date.getDate() - i);
+        const dateStr = getDateString(date);
+        const count = history[dateStr] || 0;
+
+        let plant = "🪨"; // Rock/Empty
+        if (count > 0) {
+            if (count < 5) plant = "🌱";
+            else if (count < 10) plant = "🌿";
+            else if (count < 15) plant = "🌳";
+            else plant = "🍎";
+        }
+
+        const dayName = date.toLocaleDateString("en-US", { weekday: "short" });
+        const dayNum = date.getDate().toString();
+
+        days.push({ label: `${dayName} ${dayNum}`, plant, count });
+    }
+
+    // Build Markdown Table
+    const headerRow = `| ${days.map((d) => d.label).join(" | ")} |`;
+    const separatorRow = `| ${days.map(() => ":---:").join(" | ")} |`;
+    const plantRow = `| ${days.map((d) => d.plant).join(" | ")} |`;
+    const countRow = `| ${days.map((d) => d.count).join(" | ")} |`;
+
+    return [headerRow, separatorRow, plantRow, countRow].join("\n");
 }

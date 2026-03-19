@@ -31,8 +31,9 @@ import {
 import TaskForm from "./TaskForm";
 import CreateProfileForm from "./CreateProfileForm";
 import BuildWithCursorForm from "./BuildWithCursorForm";
+
 import { v4 as uuidv4 } from "uuid";
-import { getUserStats, getXpRequiredForNextLevel, processTaskCompletion } from "./gamification";
+import { getUserStats, getXpRequiredForNextLevel, processTaskCompletion, getProgressBar, saveUserStats, showGamificationAlerts } from "./gamification";
 import { UserStats } from "./types";
 
 interface TaskListViewProps {
@@ -51,11 +52,12 @@ export default function TaskListView({ date, initialProfile }: TaskListViewProps
     });
     const [isShowingDetail, setIsShowingDetail] = useState(false);
     const [isLoading, setIsLoading] = useState(true);
-    const [undoStack, setUndoStack] = useState<Task[][]>([]);
-    const [redoStack, setRedoStack] = useState<Task[][]>([]);
+    const [undoStack, setUndoStack] = useState<{ tasks: Task[]; stats: UserStats | null }[]>([]);
+    const [redoStack, setRedoStack] = useState<{ tasks: Task[]; stats: UserStats | null }[]>([]);
     const [isProfileLoaded, setIsProfileLoaded] = useState(false);
     const [userStats, setUserStats] = useState<UserStats | null>(null);
     const tasksRef = useRef<Task[]>([]);
+    const userStatsRef = useRef<UserStats | null>(null);
 
     useEffect(() => {
         refreshUserStats();
@@ -93,6 +95,10 @@ export default function TaskListView({ date, initialProfile }: TaskListViewProps
     useEffect(() => {
         tasksRef.current = tasks;
     }, [tasks]);
+
+    useEffect(() => {
+        userStatsRef.current = userStats;
+    }, [userStats]);
 
     useEffect(() => {
         if (isProfileLoaded) {
@@ -226,7 +232,7 @@ export default function TaskListView({ date, initialProfile }: TaskListViewProps
     }
 
     const pushToUndoStack = useCallback(() => {
-        setUndoStack((prev) => [...prev, tasksRef.current]);
+        setUndoStack((prev) => [...prev, { tasks: tasksRef.current, stats: userStatsRef.current }]);
         setRedoStack([]); // Clear redo stack on new action
     }, []);
 
@@ -238,26 +244,38 @@ export default function TaskListView({ date, initialProfile }: TaskListViewProps
     async function handleUndo() {
         if (undoStack.length === 0) return;
 
-        const previousTasks = undoStack[undoStack.length - 1];
+        const previousEntry = undoStack[undoStack.length - 1];
         const newUndoStack = undoStack.slice(0, -1);
 
-        setRedoStack((prev) => [...prev, tasksRef.current]);
+        setRedoStack((prev) => [...prev, { tasks: tasksRef.current, stats: userStatsRef.current }]);
         setUndoStack(newUndoStack);
-        setTasks(previousTasks);
-        await saveTasks(date, previousTasks, selectedProfile);
+        setTasks(previousEntry.tasks);
+
+        if (previousEntry.stats) {
+            setUserStats(previousEntry.stats);
+            await saveUserStats(previousEntry.stats);
+        }
+
+        await saveTasks(date, previousEntry.tasks, selectedProfile);
         await showToast({ style: Toast.Style.Success, title: "Undone" });
     }
 
     async function handleRedo() {
         if (redoStack.length === 0) return;
 
-        const nextTasks = redoStack[redoStack.length - 1];
+        const nextEntry = redoStack[redoStack.length - 1];
         const newRedoStack = redoStack.slice(0, -1);
 
-        setUndoStack((prev) => [...prev, tasksRef.current]);
+        setUndoStack((prev) => [...prev, { tasks: tasksRef.current, stats: userStatsRef.current }]);
         setRedoStack(newRedoStack);
-        setTasks(nextTasks);
-        await saveTasks(date, nextTasks, selectedProfile);
+        setTasks(nextEntry.tasks);
+
+        if (nextEntry.stats) {
+            setUserStats(nextEntry.stats);
+            await saveUserStats(nextEntry.stats);
+        }
+
+        await saveTasks(date, nextEntry.tasks, selectedProfile);
         await showToast({ style: Toast.Style.Success, title: "Redone" });
     }
 
@@ -345,7 +363,7 @@ export default function TaskListView({ date, initialProfile }: TaskListViewProps
     };
 
     const navTitle = userStats
-        ? `Lvl ${userStats.level} • ${userStats.xp}/${getXpRequiredForNextLevel(userStats.level)} XP 🔥 ${userStats.currentStreak}`
+        ? `Lvl ${userStats.level} ${getProgressBar(userStats.xp, getXpRequiredForNextLevel(userStats.level))} ${userStats.xp}/${getXpRequiredForNextLevel(userStats.level)} XP 🔥 ${userStats.currentStreak}`
         : `Tasks for ${getDateString(date)}`;
 
     return (
@@ -601,8 +619,9 @@ function TaskItem({
         else if (task.status === "ready-to-merge") newStatus = "done";
 
         if (newStatus === "done" && task.status !== "done") {
-            const { xpAwarded } = await processTaskCompletion(task, "task");
+            const { xpAwarded, bonusXp, leveledUp } = await processTaskCompletion(task, "task");
             if (xpAwarded) {
+                await showGamificationAlerts(!!leveledUp, bonusXp);
                 await onUpdateTask({ ...task, status: newStatus, xpAwarded: true });
                 onStatsChange();
                 return;
@@ -614,8 +633,9 @@ function TaskItem({
 
     async function handleSetStatus(status: TaskStatus) {
         if (status === "done" && task.status !== "done") {
-            const { xpAwarded } = await processTaskCompletion(task, "task");
+            const { xpAwarded, bonusXp, leveledUp } = await processTaskCompletion(task, "task");
             if (xpAwarded) {
+                await showGamificationAlerts(!!leveledUp, bonusXp);
                 await onUpdateTask({ ...task, status, xpAwarded: true });
                 onStatsChange();
                 return;
@@ -699,7 +719,91 @@ function TaskItem({
                     ]
                     : undefined
             }
-            detail={<List.Item.Detail markdown={`# ${task.title}\n\n${task.description}`} />}
+            detail={
+                <List.Item.Detail
+                    markdown={`# ${task.title}\n\n${task.description}`}
+                    metadata={
+                        <List.Item.Detail.Metadata>
+                            <List.Item.Detail.Metadata.TagList title="Status">
+                                <List.Item.Detail.Metadata.TagList.Item
+                                    text={
+                                        task.status === "in-progress"
+                                            ? "In Progress"
+                                            : task.status.replace(/-/g, " ").replace(/\b\w/g, (l) => l.toUpperCase())
+                                    }
+                                    color={
+                                        task.status === "done"
+                                            ? Color.Green
+                                            : task.status === "paused"
+                                                ? Color.Yellow
+                                                : task.status === "in-progress"
+                                                    ? Color.Blue
+                                                    : task.status === "waiting-for-review"
+                                                        ? Color.Magenta
+                                                        : task.status === "ready-to-merge"
+                                                            ? Color.Orange
+                                                            : Color.SecondaryText
+                                    }
+                                />
+                            </List.Item.Detail.Metadata.TagList>
+                            <List.Item.Detail.Metadata.TagList title="Priority">
+                                <List.Item.Detail.Metadata.TagList.Item
+                                    text={task.priority.charAt(0).toUpperCase() + task.priority.slice(1)}
+                                    color={task.priority === "high" ? Color.Red : task.priority === "medium" ? Color.Orange : Color.Green}
+                                />
+                            </List.Item.Detail.Metadata.TagList>
+                            <List.Item.Detail.Metadata.Label title="Created" text={new Date(task.createdAt).toLocaleString()} />
+                            {task.github && (
+                                <>
+                                    <List.Item.Detail.Metadata.Separator />
+                                    <List.Item.Detail.Metadata.Label title="GitHub" text={`#${task.github.number}`} />
+                                    <List.Item.Detail.Metadata.TagList title="State">
+                                        <List.Item.Detail.Metadata.TagList.Item
+                                            text={task.github.state.replace(/_/g, " ")}
+                                            color={
+                                                task.github.state === "merged"
+                                                    ? Color.Purple
+                                                    : task.github.state === "changes_requested"
+                                                        ? Color.Orange
+                                                        : task.github.state === "closed"
+                                                            ? Color.Red
+                                                            : Color.Green
+                                            }
+                                        />
+                                    </List.Item.Detail.Metadata.TagList>
+                                    <List.Item.Detail.Metadata.Link title="Link" target={task.github.url} text="Open" />
+                                    {task.github.linkedPRs && task.github.linkedPRs.length > 0 && (
+                                        <>
+                                            <List.Item.Detail.Metadata.Separator />
+                                            <List.Item.Detail.Metadata.Label
+                                                title="Linked PRs"
+                                                text={`${task.github.linkedPRs.length} PR(s)`}
+                                            />
+                                            {task.github.linkedPRs.map((pr) => (
+                                                <List.Item.Detail.Metadata.Link
+                                                    key={pr.number}
+                                                    title={`PR #${pr.number}`}
+                                                    target={pr.url}
+                                                    text={`${pr.title} (${pr.state.toLowerCase()})`}
+                                                />
+                                            ))}
+                                        </>
+                                    )}
+                                </>
+                            )}
+                            {task.deadline && (
+                                <List.Item.Detail.Metadata.Label title="Deadline" text={new Date(task.deadline).toLocaleDateString()} />
+                            )}
+                            {task.expectedDuration && (
+                                <List.Item.Detail.Metadata.Label
+                                    title="Expected Duration"
+                                    text={formatDuration(task.expectedDuration)}
+                                />
+                            )}
+                        </List.Item.Detail.Metadata>
+                    }
+                />
+            }
             actions={
                 <ActionPanel>
                     <Action
@@ -765,6 +869,12 @@ function TaskItem({
                             shortcut={{ modifiers: ["opt"], key: "enter" }}
                         />
                     )}
+                    <Action
+                        title="Start Task"
+                        icon={Icon.Play}
+                        shortcut={{ modifiers: ["cmd", "shift"], key: "s" }}
+                        onAction={() => handleSetStatus("in-progress")}
+                    />
                     <Action.Push
                         title="Build with Cursor"
                         icon={Icon.Code}
@@ -776,12 +886,6 @@ function TaskItem({
                         icon={Icon.Pause}
                         shortcut={{ modifiers: ["cmd", "shift"], key: "p" }}
                         onAction={() => handleSetStatus("paused")}
-                    />
-                    <Action
-                        title="Start Task"
-                        icon={Icon.Play}
-                        shortcut={{ modifiers: ["cmd", "shift"], key: "s" }}
-                        onAction={() => handleSetStatus("in-progress")}
                     />
                     <ActionPanel.Submenu title="Change Status" icon={Icon.Pencil}>
                         <Action title="In Progress" onAction={() => handleSetStatus("in-progress")} />
@@ -1082,18 +1186,6 @@ export function TaskDetail({
                                 icon={Icon.Pause}
                                 shortcut={{ modifiers: ["cmd", "shift"], key: "p" }}
                                 onAction={() => handleSetStatus("paused")}
-                            />
-                            <Action
-                                title="Pause Task"
-                                icon={Icon.Pause}
-                                shortcut={{ modifiers: ["cmd", "shift"], key: "p" }}
-                                onAction={() => handleSetStatus("paused")}
-                            />
-                            <Action
-                                title="Start Task"
-                                icon={Icon.Play}
-                                shortcut={{ modifiers: ["cmd", "shift"], key: "s" }}
-                                onAction={() => handleSetStatus("in-progress")}
                             />
                             <Action.Push
                                 title="Build with Cursor"

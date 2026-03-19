@@ -55,6 +55,13 @@
             "subtitle": "Manage your daily routines",
             "description": "View and manage daily recurring tasks",
             "mode": "view"
+        },
+        {
+            "name": "view-profile",
+            "title": "View Profile",
+            "subtitle": "View your gamification stats",
+            "description": "View your profile, level, and contribution graph",
+            "mode": "view"
         }
     ],
     "preferences": [
