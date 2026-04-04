@@ -41,6 +41,27 @@
             "subtitle": "View tasks for a specific date",
             "description": "Select a date to view tasks",
             "mode": "view"
+        },
+        {
+            "name": "view-all-tasks",
+            "title": "View All Undone Tasks",
+            "subtitle": "See all incomplete tasks grouped by profile",
+            "description": "View all incomplete tasks across all profiles",
+            "mode": "view"
+        },
+        {
+            "name": "view-routines",
+            "title": "Daily Routines",
+            "subtitle": "Manage your daily routines",
+            "description": "View and manage daily recurring tasks",
+            "mode": "view"
+        },
+        {
+            "name": "view-profile",
+            "title": "View Profile",
+            "subtitle": "View your gamification stats",
+            "description": "View your profile, level, and contribution graph",
+            "mode": "view"
         }
     ],
     "preferences": [
@@ -56,6 +77,7 @@
         "@octokit/graphql": "^8.0.0",
         "@raycast/api": "^1.104.1",
         "@raycast/utils": "^1.17.0",
+        "highlight.js": "^11.11.1",
         "uuid": "^13.0.0"
     },
     "devDependencies": {
